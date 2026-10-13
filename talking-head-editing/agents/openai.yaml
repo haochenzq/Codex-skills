@@ -1,0 +1,6 @@
+interface:
+  display_name: "口播智能剪辑"
+  short_description: "理解原声口播素材，整理口误重录与停顿，输出同步剪接和中文字幕成片"
+  default_prompt: "用 $talking-head-editing 整理我录制的口播素材，先对齐剪辑方案，再完成原声成片。"
+policy:
+  allow_implicit_invocation: true

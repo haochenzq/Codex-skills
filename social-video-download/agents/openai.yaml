@@ -1,0 +1,6 @@
+interface:
+  display_name: "抖音分享链接下载"
+  short_description: "下载单条或批量抖音分享链接，验证后保存到本地视频分析池"
+  default_prompt: "使用 $social-video-download 下载我发送的抖音视频分享链接，保存到默认视频分析池。"
+policy:
+  allow_implicit_invocation: true

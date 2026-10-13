@@ -1,0 +1,322 @@
+"""Download user-supplied Douyin video share links to a local video pool."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import http.cookiejar
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+VENDOR = SKILL_ROOT / 'runtime/python-packages'
+if VENDOR.is_dir():
+    sys.path.insert(0, str(VENDOR))
+DEFAULT_OUTPUT = Path('D:/Codex项目文件夹/自媒体相关/视频分析池')
+FFMPEG = SKILL_ROOT / 'runtime/ffmpeg/ffmpeg.exe'
+FFPROBE = FFMPEG.with_name('ffprobe.exe')
+UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+URL_RE = re.compile(r'https?://[^\s<>\"\u3000]+', re.I)
+TRAILING = '.,;!，。；！）)]}》”’'
+
+from download_errors import DownloadError
+from media_downloader import media_download
+
+def platform(url):
+    try:
+        p = urllib.parse.urlsplit(url)
+        host = (p.hostname or '').lower()
+        valid = p.scheme in ('http', 'https') and not p.username and not p.password and p.port in (None, 80, 443)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise DownloadError('invalid_link', '链接必须是正常的 HTTP/HTTPS 抖音分享地址。')
+    if host == 'v.douyin.com' and re.fullmatch(r'/[A-Za-z0-9_-]+/?', p.path):
+        return 'douyin'
+    if (host == 'douyin.com' or host.endswith('.douyin.com')) and re.fullmatch(r'/(?:share/)?video/[0-9]+/?', p.path):
+        return 'douyin'
+    raise DownloadError('unsupported_link', '仅处理单条抖音视频分享链接，不下载主页、账号或合集。')
+
+
+def extract_links(text):
+    links = []
+    for raw in URL_RE.findall(text):
+        url = raw.rstrip(TRAILING)
+        # Common copied Douyin modal links are normalized to the actual video.
+        p = urllib.parse.urlsplit(url)
+        q = urllib.parse.parse_qs(p.query)
+        host = (p.hostname or '').lower()
+        if (host == 'douyin.com' or host.endswith('.douyin.com')) and q.get('modal_id', [''])[0].isdigit():
+            url = 'https://www.douyin.com/video/' + q['modal_id'][0]
+        if url not in links:
+            links.append(url)
+    return links
+
+def fingerprint(value):
+    return hashlib.sha256(value.encode()).hexdigest()[:16]
+
+def safe_name(value):
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(value))
+    return (value.strip(' .')[:65].rstrip(' .') or '未命名视频')
+
+def probe(path, executable=FFPROBE):
+    if not Path(executable).is_file():
+        raise DownloadError('missing_ffprobe', 'ffprobe 不存在；请检查技能 runtime/ffmpeg 或指定 --ffprobe。')
+    proc = subprocess.run([str(executable), '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(path)],
+                          capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60)
+    if proc.returncode:
+        raise DownloadError('invalid_video', '文件无法由 ffprobe 读取，可能是错误页、密文或未完整下载。')
+    data = json.loads(proc.stdout)
+    video = next((s for s in data.get('streams', []) if s.get('codec_type') == 'video'), None)
+    duration = float(data.get('format', {}).get('duration') or 0)
+    if not video or duration <= 0 or path.stat().st_size < 1024:
+        raise DownloadError('invalid_video', '文件没有有效视频流或时长。')
+    # Decode short samples near the beginning and end; detect unusable ciphertext/truncation.
+    decoder = Path(executable).with_name('ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+    if not decoder.is_file():
+        raise DownloadError('missing_ffmpeg', 'ffprobe 同目录需要 ffmpeg，以验证媒体可以解码。')
+    for position in dict.fromkeys((0, max(0, duration - 1))):
+        result = subprocess.run([str(decoder), '-v', 'error', '-xerror', '-ss', str(position), '-i', str(path),
+                                 '-t', '0.5', '-map', '0:v:0', '-f', 'null', '-'],
+                                capture_output=True, timeout=60)
+        if result.returncode:
+            raise DownloadError('decode_failed', '媒体采样解码失败；不将该文件报告为下载成功。')
+    return {'bytes': path.stat().st_size, 'duration_seconds': duration,
+            'width': video.get('width'), 'height': video.get('height'), 'codec': video.get('codec_name')}
+
+class QuietLogger:
+    def debug(self, message):
+        pass
+    def warning(self, message):
+        pass
+    def error(self, message):
+        pass
+
+def douyin_download(url, stage, cookie_file=None, ffmpeg=FFMPEG, reuse=None):
+    try:
+        import yt_dlp
+    except ImportError:
+        raise DownloadError('missing_dependency', 'yt-dlp 依赖缺失，请检查技能 runtime/python-packages。')
+    options = {'outtmpl': str(stage / 'video.%(ext)s'), 'format': 'best[ext=mp4]/best',
+               'noplaylist': True, 'quiet': True, 'no_warnings': True, 'logger': QuietLogger(),
+               'socket_timeout': 30, 'retries': 2, 'extractor_retries': 1,
+               'ffmpeg_location': str(ffmpeg.parent), 'overwrites': False,
+               'windowsfilenames': True}
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            if cookie_file:
+                # Only pass the relevant site cookies, in memory; never copy full browser credentials.
+                jar = http.cookiejar.MozillaCookieJar()
+                jar.load(str(cookie_file), ignore_discard=True, ignore_expires=False)
+                for cookie in jar:
+                    domain = cookie.domain.lstrip('.')
+                    if domain == 'douyin.com' or domain.endswith('.douyin.com'):
+                        ydl.cookiejar.set_cookie(cookie)
+            # Resolve metadata once, then check identity before transferring media.
+            info = ydl.extract_info(url, download=False)
+            if not info or info.get('_type') in ('playlist', 'multi_video'):
+                raise DownloadError('not_single_video', '该链接不是单条普通视频。')
+            if reuse and info.get('id'):
+                existing = reuse(str(info['id']))
+                if existing:
+                    return existing
+            info = ydl.process_ie_result(info, download=True)
+            path = Path(ydl.prepare_filename(info))
+            if not path.is_file() or not path.resolve().is_relative_to(stage.resolve()):
+                raise DownloadError('download_missing', '下载器未产生预期媒体文件。')
+            return path, {'id': str(info.get('id') or fingerprint(url)),
+                          'title': info.get('title') or '抖音视频', 'author': info.get('uploader') or ''}
+    except DownloadError:
+        raise
+    except Exception as exc:
+        # Do not surface raw signed URLs, cookies or extractor responses.
+        message = str(exc).lower()
+        if 'cookie' in message or 'login' in message or '403' in message:
+            raise DownloadError('login_required', '抖音需要新鲜 Cookie 或登录态；可在 Edge 打开此视频后提供该站点 Cookie 文件。') from None
+        raise DownloadError('douyin_parse_failed', '抖音下载失败：可能是链接失效、网络限制或平台解析规则变化。') from None
+
+def video_id_from_url(url):
+    """Only accepted direct video links have an identity available offline."""
+    platform(url)
+    match = re.fullmatch(r'/(?:share/)?video/([0-9]+)/?', urllib.parse.urlsplit(url).path)
+    return match.group(1) if match else None
+
+
+class SourceIndex:
+    """One sidecar scan per batch; media is still verified at every reuse."""
+    def __init__(self, output):
+        self.output = output.resolve()
+        self.requests = {}
+        self.videos = {}
+        for sidecar in output.glob('*.source.json'):
+            try:
+                record = json.loads(sidecar.read_text(encoding='utf-8'))
+                if not isinstance(record, dict) or record.get('platform') != 'douyin':
+                    continue
+                # Older records embedded the extractor ID only in the filename.
+                legacy = re.search(r'_\[([0-9]+)\](?:_\d+)?\.[^.]+$', record.get('file', ''))
+                if not record.get('video_id') and legacy:
+                    record['video_id'] = legacy.group(1)
+                self.add(record)
+            except (OSError, ValueError, TypeError):
+                continue
+
+    def add(self, record):
+        for key, table in (('request_id', self.requests), ('video_id', self.videos)):
+            value = record.get(key)
+            if isinstance(value, str) and value:
+                table.setdefault(value, []).append(record)
+
+    def find(self, ffprobe, request_id=None, video_id=None):
+        candidates = self.videos.get(video_id, []) + self.requests.get(request_id, [])
+        checked = set()
+        for record in candidates:
+            try:
+                existing = self.output / record['file']
+                if existing in checked:
+                    continue
+                checked.add(existing)
+                if existing.resolve().parent != self.output or not existing.is_file():
+                    continue
+                return {'status': 'already_exists', 'platform': 'douyin',
+                        'path': str(existing.resolve()), **probe(existing, ffprobe)}
+            except (OSError, ValueError, TypeError, KeyError, DownloadError):
+                continue
+        return None
+
+
+def save_one(url, output, args, source_index=None):
+    kind = platform(url)
+    request_id = fingerprint(url)
+    source_index = source_index if source_index is not None else SourceIndex(output)
+    direct_id = video_id_from_url(url)
+    supplied_id = getattr(args, 'video_id', None)
+    if direct_id and supplied_id and direct_id != supplied_id:
+        raise DownloadError('video_id_mismatch', '备用媒体的视频ID与源链接不一致。')
+    known_id = direct_id or supplied_id
+    existing = source_index.find(args.ffprobe, request_id, known_id)
+    if existing:
+        return existing
+    with tempfile.TemporaryDirectory(prefix='.download-', dir=output) as temporary:
+        stage = Path(temporary)
+        if getattr(args, 'local_media', None):
+            path = stage / ('video' + args.local_media.suffix)
+            if not args.local_media.is_file():
+                raise DownloadError('local_media_missing', '浏览器下载的本地媒体文件不存在。')
+            shutil.copyfile(args.local_media, path)
+            profile = {'id': known_id or request_id, 'title': args.title or '视频', 'author': ''}
+        elif args.media_url:
+            path = stage / 'video.mp4'
+            media_download(args.media_url, path, referer='https://www.douyin.com/')
+            profile = {'id': known_id or request_id, 'title': args.title or '抖音视频', 'author': ''}
+        else:
+            downloaded = douyin_download(url, stage, args.cookies_file, args.ffprobe.with_name('ffmpeg.exe'),
+                                         lambda identity: source_index.find(args.ffprobe, video_id=identity))
+            if isinstance(downloaded, dict):
+                return downloaded
+            path, profile = downloaded
+            known_id = profile['id']
+        verified = probe(path, args.ffprobe)
+        stem = safe_name('抖音_' + profile['title'])
+        stem += '_[' + safe_name(profile['id'])[:32] + ']'
+        destination = output / (stem + path.suffix)
+        counter = 1
+        # Hard-link promotion is exclusive, preventing overwrite even if another process races.
+        while True:
+            try:
+                os.link(path, destination)
+                break
+            except FileExistsError:
+                destination = output / (stem + f'_{counter}' + path.suffix)
+                counter += 1
+        record = {'request_id': request_id, 'platform': kind, 'file': destination.name,
+                  'title': profile['title'], 'author': profile.get('author', ''), **verified,
+                  'saved_at': time.strftime('%Y-%m-%dT%H:%M:%S%z')}
+        if known_id:
+            record['video_id'] = known_id
+        # Source sidecar deliberately excludes signed media URLs and cookies.
+        with destination.with_suffix('.source.json').open('x', encoding='utf-8') as stream:
+            json.dump(record, stream, ensure_ascii=False, indent=2)
+        source_index.add(record)
+        return {'status': 'downloaded', 'platform': kind, 'path': str(destination.resolve()), **verified}
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('text', nargs='*', help='分享链接或包含链接的分享文案')
+    parser.add_argument('--input-file', type=Path, help='UTF-8 分享文案文件；避免 shell 转义问题')
+    parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument('--cookies-file', type=Path, help='抖音 Netscape Cookie 文件')
+    parser.add_argument('--ffprobe', type=Path, default=FFPROBE)
+    media_group = parser.add_mutually_exclusive_group()
+    media_group.add_argument('--media-url', help='从同一视频页面/API获得的媒体直链（只限单条源链接）')
+    media_group.add_argument('--local-media', type=Path, help='已从同一目标视频页面下载的媒体；复验并复制入库')
+    parser.add_argument('--video-id', help='备用模式中已核实的目标视频ID')
+    parser.add_argument('--title')
+    parser.add_argument('--dry-run', action='store_true', help='只解析输入与目标路径；不联网、不创建目录')
+    parser.add_argument('--self-check', action='store_true')
+    args = parser.parse_args(argv)
+    if args.self_check:
+        checks = {'python_supported': sys.version_info >= (3, 10)}
+        details = {'python': sys.version.split()[0], 'python_executable': sys.executable,
+                   'skill_root': str(SKILL_ROOT), 'default_output': str(DEFAULT_OUTPUT)}
+        try:
+            import yt_dlp.version
+            import yt_dlp
+            checks['yt_dlp_bundled'] = Path(yt_dlp.__file__).resolve().is_relative_to(VENDOR.resolve())
+            details.update(yt_dlp=yt_dlp.version.__version__, yt_dlp_path=yt_dlp.__file__)
+        except ImportError:
+            checks['yt_dlp_bundled'] = False
+        for name, executable in (('ffprobe', args.ffprobe), ('ffmpeg', args.ffprobe.with_name('ffmpeg.exe'))):
+            details[name + '_path'] = str(executable)
+            checks[name + '_exists'] = executable.is_file()
+            try:
+                result = subprocess.run([str(executable), '-version'], capture_output=True,
+                                        text=True, encoding='utf-8', errors='replace', timeout=15)
+                checks[name + '_runs'] = result.returncode == 0
+                details[name + '_version'] = result.stdout.splitlines()[0] if result.stdout else ''
+            except (OSError, subprocess.TimeoutExpired):
+                checks[name + '_runs'] = False
+        passed = all(checks.values())
+        print(json.dumps({'passed': passed, **checks, **details}, ensure_ascii=False))
+        return 0 if passed else 1
+    text = '\n'.join(args.text)
+    if args.input_file:
+        text += '\n' + args.input_file.read_text(encoding='utf-8-sig')
+    links = extract_links(text)
+    if not links:
+        print(json.dumps({'status': 'failed', 'code': 'no_link', 'message': '未找到链接。请发送抖音视频分享链接或包含链接的分享文案。'}, ensure_ascii=False))
+        return 1
+    if (args.media_url or args.local_media) and len(links) != 1:
+        parser.error('媒体备用模式只能与单条源链接配合使用')
+    output = args.output.resolve()
+    results = []
+    source_index = None
+    for index, url in enumerate(links, 1):
+        try:
+            if args.dry_run:
+                result = {'status': 'planned', 'platform': platform(url), 'output': str(output)}
+            else:
+                output.mkdir(parents=True, exist_ok=True)
+                if source_index is None:
+                    source_index = SourceIndex(output)
+                result = save_one(url, output, args, source_index)
+        except DownloadError as exc:
+            result = {'status': 'failed', 'code': exc.code, 'message': str(exc)}
+        except Exception as exc:
+            result = {'status': 'failed', 'code': type(exc).__name__, 'message': '本地处理失败；检查目录权限、磁盘空间和运行依赖。'}
+        results.append({'item': index, **result})
+    print(json.dumps({'output': str(output), 'results': results}, ensure_ascii=False, indent=2))
+    return int(any(result['status'] == 'failed' for result in results))
+
+if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8')
+    raise SystemExit(main())

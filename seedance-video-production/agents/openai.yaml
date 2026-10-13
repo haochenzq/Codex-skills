@@ -1,0 +1,6 @@
+interface:
+  display_name: "Seedance 视频制作"
+  short_description: "先对齐需求和效果，由Seedance生成最终视频，成功后直接交付原片"
+  default_prompt: "使用 $seedance-video-production，先对齐我的视频需求与视听方案，确认Seedance型号和费用，再生成并直接交付原片。"
+policy:
+  allow_implicit_invocation: true

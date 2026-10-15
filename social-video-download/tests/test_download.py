@@ -37,6 +37,11 @@ class DownloadAcceptance(unittest.TestCase):
                         '-t', '2', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac',
                         '-pix_fmt', 'yuv420p', str(cls.fixture)], check=True, capture_output=True, timeout=60)
         cls.plain = cls.fixture.read_bytes()
+        cls.video_only = cls.base / 'video-only.mp4'
+        cls.audio_only = cls.base / 'audio-only.m4a'
+        for mapping, target in (('0:v:0', cls.video_only), ('0:a:0', cls.audio_only)):
+            subprocess.run([str(dl.FFMPEG), '-v', 'error', '-i', str(cls.fixture), '-map', mapping,
+                            '-c', 'copy', str(target)], check=True, capture_output=True, timeout=60)
 
     @classmethod
     def tearDownClass(cls):
@@ -219,6 +224,98 @@ class DownloadAcceptance(unittest.TestCase):
         record = {'request_id': dl.fingerprint(self.url), 'platform': 'douyin', 'file': '../fixture.mp4'}
         (self.output/'outside.source.json').write_text(json.dumps(record), encoding='utf-8')
         self.assertEqual(self.save()['status'], 'downloaded')
+
+    def test_extractor_errors_do_not_claim_login_without_evidence(self):
+        cases = [('Fresh cookies (not necessarily logged in) are needed', 'douyin_extractor_unavailable'),
+                 ('HTTP Error 403: Forbidden', 'access_denied'),
+                 ('HTTP Error 429: Too Many Requests', 'rate_limited'),
+                 ('verification challenge captcha', 'verification_required'),
+                 ('login required', 'login_required'), ('getaddrinfo failed', 'network_error')]
+        for message, code in cases:
+            class FakeYDL:
+                def __init__(self, options):
+                    pass
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    pass
+                def extract_info(self, url, download):
+                    raise RuntimeError(message + ' https://private.invalid/?token=secret')
+            with self.subTest(code=code), patch.object(yt_dlp, 'YoutubeDL', FakeYDL):
+                with self.assertRaises(dl.DownloadError) as caught:
+                    dl.douyin_download(self.url, self.base)
+                self.assertEqual(caught.exception.code, code)
+                self.assertNotIn('secret', str(caught.exception))
+
+    def test_expected_audio_rejects_video_only(self):
+        self.args.local_media = self.video_only
+        self.args.require_audio = True
+        with self.assertRaises(dl.DownloadError) as caught:
+            dl.save_one(self.url, self.output, self.args)
+        self.assertEqual(caught.exception.code, 'missing_audio')
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_expected_duration_rejects_preview(self):
+        self.args.local_media = self.fixture
+        self.args.expected_duration = 145.0
+        with self.assertRaises(dl.DownloadError) as caught:
+            dl.save_one(self.url, self.output, self.args)
+        self.assertEqual(caught.exception.code, 'duration_mismatch')
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def make_manifest(self):
+        manifest = self.output / 'browser.json'
+        manifest.write_text(json.dumps({'assets': [], 'failures': [
+            {'name': 'media-video-avc1', 'url': 'https://test.douyinvod.com/video?token=private'},
+            {'name': 'media-audio-und-mp4a', 'url': 'https://test.douyinvod.com/audio?token=private'}]}), encoding='utf-8')
+        self.args.browser_manifest = manifest
+        self.args.expected_duration = 2.0
+        return manifest
+
+    def test_browser_pair_muxes_original_codecs_and_reuses_identity(self):
+        self.make_manifest()
+        def transfer(url, target, **kwargs):
+            shutil.copyfile(self.video_only if '/video?' in url else self.audio_only, target)
+        with patch('browser_manifest.media_download', side_effect=transfer) as transfers:
+            result = dl.save_one('https://www.douyin.com/video/123', self.output, self.args)
+        self.assertEqual(transfers.call_count, 2)
+        self.assertEqual(result['codec'], 'h264')
+        self.assertEqual(result['audio_codecs'], ['aac'])
+        sidecar = Path(result['path']).with_suffix('.source.json').read_text(encoding='utf-8')
+        self.assertNotIn('private', sidecar)
+        self.assertEqual(json.loads(sidecar)['source_url'], 'https://www.douyin.com/video/123')
+        with patch('browser_manifest.media_download', side_effect=AssertionError('must reuse')):
+            reused = dl.save_one('https://www.douyin.com/share/video/123', self.output, self.args)
+        self.assertEqual(reused['status'], 'already_exists')
+
+    def test_browser_pair_rejects_ambiguous_or_untrusted_sources(self):
+        manifest = self.make_manifest()
+        for replacement in ('https://unrelated.example/audio', 'https://test.douyinvod.com/video?token=private'):
+            data = json.loads(manifest.read_text(encoding='utf-8'))
+            data['failures'][1]['url'] = replacement
+            manifest.write_text(json.dumps(data), encoding='utf-8')
+            with patch('browser_manifest.media_download', side_effect=AssertionError('no transfer')):
+                with self.assertRaises(dl.DownloadError) as caught:
+                    dl.save_one('https://www.douyin.com/video/123', self.output, self.args)
+            self.assertEqual(caught.exception.code, 'invalid_browser_manifest')
+
+    def test_browser_pair_rejects_wrong_duration_before_promotion(self):
+        self.make_manifest()
+        self.args.expected_duration = 145.0
+        with patch('browser_manifest.media_download', side_effect=lambda url, target, **kw: shutil.copyfile(self.video_only, target)):
+            with self.assertRaises(dl.DownloadError) as caught:
+                dl.save_one('https://www.douyin.com/video/123', self.output, self.args)
+        self.assertEqual(caught.exception.code, 'duration_mismatch')
+        self.assertFalse(list(self.output.glob('*.mp4')))
+
+    def test_existing_video_only_is_not_reused_when_audio_expected(self):
+        original = Path(self.save()['path'])
+        shutil.copyfile(self.video_only, original)
+        self.args.require_audio = True
+        result = self.save()
+        self.assertEqual(result['status'], 'downloaded')
+        self.assertNotEqual(Path(result['path']), original)
+        self.assertEqual(result['audio_streams'], 1)
 
 if __name__ == '__main__':
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DownloadAcceptance))

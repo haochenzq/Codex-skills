@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import http.cookiejar
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -21,7 +22,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 VENDOR = SKILL_ROOT / 'runtime/python-packages'
 if VENDOR.is_dir():
     sys.path.insert(0, str(VENDOR))
-DEFAULT_OUTPUT = Path('D:/Codex项目文件夹/自媒体相关/视频分析池')
+DEFAULT_OUTPUT = Path('D:/Codex项目文件夹/视频制作/素材')
 FFMPEG = SKILL_ROOT / 'runtime/ffmpeg/ffmpeg.exe'
 FFPROBE = FFMPEG.with_name('ffprobe.exe')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -30,6 +31,7 @@ TRAILING = '.,;!，。；！）)]}》”’'
 
 from download_errors import DownloadError
 from media_downloader import media_download
+from browser_manifest import duration_tolerance, import_stream_pair
 
 def platform(url):
     try:
@@ -68,7 +70,7 @@ def safe_name(value):
     value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(value))
     return (value.strip(' .')[:65].rstrip(' .') or '未命名视频')
 
-def probe(path, executable=FFPROBE):
+def probe(path, executable=FFPROBE, expected_duration=None, require_audio=False):
     if not Path(executable).is_file():
         raise DownloadError('missing_ffprobe', 'ffprobe 不存在；请检查技能 runtime/ffmpeg 或指定 --ffprobe。')
     proc = subprocess.run([str(executable), '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(path)],
@@ -78,20 +80,29 @@ def probe(path, executable=FFPROBE):
     data = json.loads(proc.stdout)
     video = next((s for s in data.get('streams', []) if s.get('codec_type') == 'video'), None)
     duration = float(data.get('format', {}).get('duration') or 0)
-    if not video or duration <= 0 or path.stat().st_size < 1024:
+    if not video or not math.isfinite(duration) or duration <= 0 or path.stat().st_size < 1024:
         raise DownloadError('invalid_video', '文件没有有效视频流或时长。')
+    audio = [s for s in data.get('streams', []) if s.get('codec_type') == 'audio']
+    if require_audio and not audio:
+        raise DownloadError('missing_audio', '目标视频应有声音，但文件缺少音轨；不将无声画面流当作完整原片。')
+    if expected_duration is not None:
+        if not math.isfinite(expected_duration) or expected_duration <= 0:
+            raise DownloadError('invalid_expected_duration', '预期时长必须为正数。')
+        if abs(duration - expected_duration) > duration_tolerance(expected_duration):
+            raise DownloadError('duration_mismatch', '文件时长与已核实的完整作品时长不符。')
     # Decode short samples near the beginning and end; detect unusable ciphertext/truncation.
     decoder = Path(executable).with_name('ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
     if not decoder.is_file():
         raise DownloadError('missing_ffmpeg', 'ffprobe 同目录需要 ffmpeg，以验证媒体可以解码。')
     for position in dict.fromkeys((0, max(0, duration - 1))):
         result = subprocess.run([str(decoder), '-v', 'error', '-xerror', '-ss', str(position), '-i', str(path),
-                                 '-t', '0.5', '-map', '0:v:0', '-f', 'null', '-'],
+                                 '-t', '0.5', '-map', '0:v:0', '-map', '0:a:0?', '-f', 'null', '-'],
                                 capture_output=True, timeout=60)
         if result.returncode:
             raise DownloadError('decode_failed', '媒体采样解码失败；不将该文件报告为下载成功。')
     return {'bytes': path.stat().st_size, 'duration_seconds': duration,
-            'width': video.get('width'), 'height': video.get('height'), 'codec': video.get('codec_name')}
+            'width': video.get('width'), 'height': video.get('height'), 'codec': video.get('codec_name'),
+            'audio_streams': len(audio), 'audio_codecs': [s.get('codec_name') for s in audio]}
 
 class QuietLogger:
     def debug(self, message):
@@ -140,8 +151,18 @@ def douyin_download(url, stage, cookie_file=None, ffmpeg=FFMPEG, reuse=None):
     except Exception as exc:
         # Do not surface raw signed URLs, cookies or extractor responses.
         message = str(exc).lower()
-        if 'cookie' in message or 'login' in message or '403' in message:
-            raise DownloadError('login_required', '抖音需要新鲜 Cookie 或登录态；可在 Edge 打开此视频后提供该站点 Cookie 文件。') from None
+        if 'fresh cookies' in message or 'not necessarily logged in' in message:
+            raise DownloadError('douyin_extractor_unavailable', '抖音提取接口未返回有效媒体信息；这不等于必须登录。请检查同一作品公开页面，并按网页备用路径取得完整音画。') from None
+        if any(marker in message for marker in ('captcha', 'verification challenge', 'verify you are')):
+            raise DownloadError('verification_required', '平台要求验证；由用户在网页完成，不自动绕过。') from None
+        if '403' in message:
+            raise DownloadError('access_denied', '媒体请求被平台拒绝（HTTP 403）；不据此认定必须登录。') from None
+        if '429' in message:
+            raise DownloadError('rate_limited', '平台限制请求频率；停止本条重试，稍后按授权范围恢复。') from None
+        if any(marker in message for marker in ('login required', 'log in to', 'sign in to', 'login is required')):
+            raise DownloadError('login_required', '平台明确要求登录；由用户完成抖音网页登录后再处理。') from None
+        if any(marker in message for marker in ('getaddrinfo', 'name resolution', 'timed out', 'connection refused')):
+            raise DownloadError('network_error', '网络连接或域名解析失败；先区分运行沙箱限制与平台故障。') from None
         raise DownloadError('douyin_parse_failed', '抖音下载失败：可能是链接失效、网络限制或平台解析规则变化。') from None
 
 def video_id_from_url(url):
@@ -176,7 +197,7 @@ class SourceIndex:
             if isinstance(value, str) and value:
                 table.setdefault(value, []).append(record)
 
-    def find(self, ffprobe, request_id=None, video_id=None):
+    def find(self, ffprobe, request_id=None, video_id=None, expected_duration=None, require_audio=False):
         candidates = self.videos.get(video_id, []) + self.requests.get(request_id, [])
         checked = set()
         for record in candidates:
@@ -188,7 +209,7 @@ class SourceIndex:
                 if existing.resolve().parent != self.output or not existing.is_file():
                     continue
                 return {'status': 'already_exists', 'platform': 'douyin',
-                        'path': str(existing.resolve()), **probe(existing, ffprobe)}
+                        'path': str(existing.resolve()), **probe(existing, ffprobe, expected_duration, require_audio)}
             except (OSError, ValueError, TypeError, KeyError, DownloadError):
                 continue
         return None
@@ -203,12 +224,20 @@ def save_one(url, output, args, source_index=None):
     if direct_id and supplied_id and direct_id != supplied_id:
         raise DownloadError('video_id_mismatch', '备用媒体的视频ID与源链接不一致。')
     known_id = direct_id or supplied_id
-    existing = source_index.find(args.ffprobe, request_id, known_id)
+    manifest = getattr(args, 'browser_manifest', None)
+    expected_duration = getattr(args, 'expected_duration', None)
+    require_audio = bool(manifest) or getattr(args, 'require_audio', False)
+    if manifest and (not known_id or not re.fullmatch(r'[0-9]+', known_id) or not expected_duration):
+        raise DownloadError('browser_identity_required', '分轨清单须绑定明确的视频ID及当前播放器完整时长。')
+    existing = source_index.find(args.ffprobe, request_id, known_id, expected_duration, require_audio)
     if existing:
         return existing
     with tempfile.TemporaryDirectory(prefix='.download-', dir=output) as temporary:
         stage = Path(temporary)
-        if getattr(args, 'local_media', None):
+        if manifest:
+            path = import_stream_pair(manifest, stage, args.ffprobe, expected_duration)
+            profile = {'id': known_id, 'title': args.title or '抖音视频', 'author': getattr(args, 'author', None) or ''}
+        elif getattr(args, 'local_media', None):
             path = stage / ('video' + args.local_media.suffix)
             if not args.local_media.is_file():
                 raise DownloadError('local_media_missing', '浏览器下载的本地媒体文件不存在。')
@@ -220,12 +249,14 @@ def save_one(url, output, args, source_index=None):
             profile = {'id': known_id or request_id, 'title': args.title or '抖音视频', 'author': ''}
         else:
             downloaded = douyin_download(url, stage, args.cookies_file, args.ffprobe.with_name('ffmpeg.exe'),
-                                         lambda identity: source_index.find(args.ffprobe, video_id=identity))
+                                         lambda identity: source_index.find(args.ffprobe, video_id=identity,
+                                                                            expected_duration=expected_duration,
+                                                                            require_audio=require_audio))
             if isinstance(downloaded, dict):
                 return downloaded
             path, profile = downloaded
             known_id = profile['id']
-        verified = probe(path, args.ffprobe)
+        verified = probe(path, args.ffprobe, expected_duration, require_audio)
         stem = safe_name('抖音_' + profile['title'])
         stem += '_[' + safe_name(profile['id'])[:32] + ']'
         destination = output / (stem + path.suffix)
@@ -243,6 +274,12 @@ def save_one(url, output, args, source_index=None):
                   'saved_at': time.strftime('%Y-%m-%dT%H:%M:%S%z')}
         if known_id:
             record['video_id'] = known_id
+            if re.fullmatch(r'[0-9]+', known_id):
+                record['source_url'] = 'https://www.douyin.com/video/' + known_id
+        if expected_duration:
+            record['expected_duration_seconds'] = expected_duration
+        if manifest:
+            record['acquisition'] = 'browser_observed_stream_pair'
         # Source sidecar deliberately excludes signed media URLs and cookies.
         with destination.with_suffix('.source.json').open('x', encoding='utf-8') as stream:
             json.dump(record, stream, ensure_ascii=False, indent=2)
@@ -259,8 +296,12 @@ def main(argv=None):
     media_group = parser.add_mutually_exclusive_group()
     media_group.add_argument('--media-url', help='从同一视频页面/API获得的媒体直链（只限单条源链接）')
     media_group.add_argument('--local-media', type=Path, help='已从同一目标视频页面下载的媒体；复验并复制入库')
+    media_group.add_argument('--browser-manifest', type=Path, help='同一目标页面导出的音画分轨清单；地址只在本地使用')
     parser.add_argument('--video-id', help='备用模式中已核实的目标视频ID')
+    parser.add_argument('--expected-duration', type=float, help='已核实的完整作品时长（秒）；用于拒绝预览片段')
+    parser.add_argument('--require-audio', action='store_true', help='目标应有声音时启用；拒绝无声音画流')
     parser.add_argument('--title')
+    parser.add_argument('--author', help='网页上已核实的发布者名称（可选）')
     parser.add_argument('--dry-run', action='store_true', help='只解析输入与目标路径；不联网、不创建目录')
     parser.add_argument('--self-check', action='store_true')
     args = parser.parse_args(argv)
@@ -295,7 +336,7 @@ def main(argv=None):
     if not links:
         print(json.dumps({'status': 'failed', 'code': 'no_link', 'message': '未找到链接。请发送抖音视频分享链接或包含链接的分享文案。'}, ensure_ascii=False))
         return 1
-    if (args.media_url or args.local_media) and len(links) != 1:
+    if (args.media_url or args.local_media or args.browser_manifest) and len(links) != 1:
         parser.error('媒体备用模式只能与单条源链接配合使用')
     output = args.output.resolve()
     results = []

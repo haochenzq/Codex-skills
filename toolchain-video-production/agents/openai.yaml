@@ -1,6 +1,6 @@
 interface:
-  display_name: "工具链视频制作"
-  short_description: "先对齐需求与效果，用自身工具链完成视频制作和合成，全程排除Seedance"
-  default_prompt: "使用 $toolchain-video-production，先对齐我的视频需求与视听方案，全程用自身工具链完成制作、合成和交付，不考虑Seedance。"
+  display_name: "视频制作专属 · 本地工具链"
+  short_description: "视频制作项目专属：按已确认方案使用本地工具链制作与合成，不使用Seedance"
+  default_prompt: "为视频制作项目使用 $toolchain-video-production 按本次需求完成本地整片创作、动画或复杂合成，沿用已确认方案，不使用Seedance。"
 policy:
   allow_implicit_invocation: true

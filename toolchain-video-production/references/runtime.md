@@ -1,6 +1,6 @@
-# 工具链与独立语音入口
+# 工具链与声音入口
 
-公共运行目录：`C:/Users/lenovo/.codex/runtimes/personal-video`。构建项目维护源码与依赖，制作项目保存自己的素材、EDL、时间轴、源码和成片。共享环境只提供运行能力；本路径使用所需制作、合成和独立语音/分析入口，全程排除Seedance。
+公共运行目录：`C:/Users/lenovo/.codex/runtimes/personal-video`。构建项目维护源码与依赖，制作项目在工作期间使用所需素材、EDL、时间轴及源码，交付与留存按公共收尾规则执行。共享环境只提供运行能力；本路径使用所需制作、合成和独立语音/分析入口，全程排除Seedance。
 
 ## 本地制作
 
@@ -9,7 +9,7 @@ $taskVideoTools = 'C:\Users\lenovo\.codex\runtimes\personal-video\video-toolchai
 & $taskVideoTools doctor
 # 仅选择共享Remotion工程时查询；其余命令按本次路径使用，不逐项执行整段示例。
 & $taskVideoTools compositions
-& $taskVideoTools production '<本项目timeline.json绝对路径>' --validate
+# 仅需独立诊断时用 --validate；正常渲染已校验输入，不先重复运行。
 & $taskVideoTools production '<同一timeline.json绝对路径>' '<本项目新版成片绝对路径.mp4>'
 # 精确参数按工具帮助与所选专业技能读取
 & $taskVideoTools remotion-render --help
@@ -22,21 +22,16 @@ $taskVideoTools = 'C:\Users\lenovo\.codex\runtimes\personal-video\video-toolchai
 
 需要剪辑方法时读取全局 `C:/Users/lenovo/.codex/skills/video-use/SKILL.md`；本机全局入口及本任务约束优先于上游失效路径或默认ElevenLabs示例。只读取所需Remotion/动画专业技能，不把其示例工具组合强加给作品。
 
-## 独立配音
+## 三维镜头
 
-```powershell
-$taskSpeechPython = 'C:\Users\lenovo\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-$taskSpeechEntry = 'C:\Users\lenovo\.codex\runtimes\personal-video\run_api.py'
-& $taskSpeechPython -B -X utf8 $taskSpeechEntry production_cloud prepare tts '<豆包语音请求JSON绝对路径>' '<本项目新语音任务目录>'
-& $taskSpeechPython -B -X utf8 $taskSpeechEntry production_cloud status '<语音任务目录>'
-# 本次语音服务、上传和费用已获授权后提交
-& $taskSpeechPython -B -X utf8 $taskSpeechEntry production_cloud submit '<语音任务目录>' --allow-paid-calls
-```
+Blender 三维镜头按需读取 [Blender入口与验收](blender.md)，使用同一公共入口的 `blender start/status/render/verify`；后台渲染不依赖已运行的GUI或MCP连接。
 
-该段仅使用豆包语音2.0 TTS。需要中英文字级时间戳时显式设置`req_params.audio_params.enable_subtitle=true`，不用旧`enable_timestamp`；完成后检查`timestamp_status=available`及`transcript.json`，`missing/not_requested`不能称字幕已齐，不能自动重新配音。语气指令、语速等按原生请求传入。TTS不执行视频query/download。当前入口有1–300字符范围，长文本先适配，不能静默截断。需要ASR或已有素材分析时按 `volc-video-analysis` 调用，复用有效转写。
+## 按需声音
+
+旁白与角色配音使用既有豆包TTS 2.0 CLI；BGM、环境声与音效使用豆包音频生成1.0原生直连，MediaKit代理按需选用。请求示例、任务保存与取音频见[声音选择与调用](audio.md)，只在作品需要时读取。已有声音直接使用本地合成入口。ASR或已有素材分析按 `volc-video-analysis` 调用，复用有效结果。
 
 ## 依赖与恢复
 
 依赖位置、版本与渲染浏览器统一读取[公共运行说明](C:/Users/lenovo/.codex/runtimes/personal-video/RUNTIME.md)；Remotion实际使用共享Chrome Headless Shell。进入新的执行环境或首次实际使用所选能力时核对所需依赖；同一任务已核对的能力在环境变化或报错时再检查，局部改版不重复检查整套环境。`doctor`可用于共享环境核对；Manim入口为 `video-tools.ps1 manim <原生参数>`，其他三维工具按需核实。Studio只是临时服务。
 
-私有凭据由既有独立语音/分析适配器读取，不复制Key、连接配置、签名URL或完整云响应到通用交接包。本次制作保留素材、实际源码、版本与恢复记录；依赖缺失先定位维护项目，避免另建工具或凭据副本。
+私有凭据由既有独立语音/分析适配器读取，不复制Key、连接配置、签名URL或完整云响应到通用交接包。未完成制作仅保留实际接续所需材料；依赖缺失先定位维护项目，避免另建工具或凭据副本。

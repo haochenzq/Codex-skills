@@ -1,5 +1,6 @@
 """Local Douyin acceptance with real media and mocked downloads; no live requests."""
 import contextlib
+import errno
 from datetime import datetime
 import hashlib
 import http.cookiejar
@@ -70,13 +71,91 @@ class DownloadAcceptance(unittest.TestCase):
         saved = Path(result['path'])
         self.assertEqual(saved.read_bytes(), self.plain)
         self.assertTrue(saved.name.startswith('抖音_'))
-        record = json.loads(saved.with_suffix('.source.json').read_text(encoding='utf-8'))
-        self.assertEqual(record['platform'], 'douyin')
-        self.assertNotIn('media_url', record)
+        self.assertEqual(list(self.output.iterdir()), [saved])
+        self.args.video_id = self.profile['id']
         with patch.object(dl, 'douyin_download', side_effect=AssertionError('must reuse existing')):
             reused = dl.save_one(self.url, self.output, self.args)
         self.assertEqual(reused['status'], 'already_exists')
         self.assertEqual(reused['path'], result['path'])
+
+    def test_regular_download_uses_system_temp_and_cleans_own_stage(self):
+        stages = []
+        def transfer(url, stage, *args):
+            stages.append(stage)
+            self.assertEqual(stage.parent.resolve(), Path(tempfile.gettempdir()).resolve())
+            self.assertFalse(stage.is_relative_to(self.output))
+            return self.download_fixture(url, stage)
+        with patch.object(dl, 'douyin_download', side_effect=transfer):
+            result = dl.save_one(self.url, self.output, self.args)
+        self.assertEqual(Path(result['path']).read_bytes(), self.plain)
+        self.assertFalse(stages[0].exists())
+
+    def test_explicit_project_stage_preserves_other_files(self):
+        self.args.temp_dir = self.output / 'task-staging'
+        self.args.temp_dir.mkdir()
+        unrelated = self.args.temp_dir / 'keep.txt'
+        unrelated.write_text('recovery', encoding='utf-8')
+        stages = []
+        def transfer(url, stage, *args):
+            stages.append(stage)
+            self.assertEqual(stage.parent, self.args.temp_dir.resolve())
+            return self.download_fixture(url, stage)
+        with patch.object(dl, 'douyin_download', side_effect=transfer):
+            dl.save_one(self.url, self.output, self.args)
+        self.assertEqual(list(self.args.temp_dir.iterdir()), [unrelated])
+        self.assertFalse(stages[0].exists())
+
+    def test_default_and_explicit_desktop_stage_fail_before_transfer(self):
+        desktop = self.output / 'redirected-desktop'
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                self.args.temp_dir = desktop / 'task' if explicit else None
+                with patch.object(dl, 'desktop_roots', return_value=[desktop]), \
+                     patch.object(dl.tempfile, 'gettempdir', return_value=str(desktop)), \
+                     patch.object(dl, 'douyin_download', side_effect=AssertionError('no transfer')):
+                    with self.assertRaises(dl.DownloadError) as caught:
+                        dl.save_one(self.url, self.output, self.args)
+                self.assertEqual(caught.exception.code, 'desktop_staging_forbidden')
+                self.assertFalse(desktop.exists())
+
+    def test_browser_desktop_inputs_fail_before_read_or_transfer(self):
+        desktop = self.output / 'redirected-desktop'
+        for mode in ('local_media', 'browser_manifest'):
+            with self.subTest(mode=mode), patch.object(dl, 'desktop_roots', return_value=[desktop]), \
+                 patch.object(dl, 'import_stream_pair', side_effect=AssertionError('no import')):
+                setattr(self.args, mode, desktop / 'signed-or-media.tmp')
+                with self.assertRaises(dl.DownloadError) as caught:
+                    dl.save_one('https://www.douyin.com/video/123', self.output, self.args)
+                self.assertEqual(caught.exception.code, 'desktop_staging_forbidden')
+                setattr(self.args, mode, None)
+        with patch.object(dl, 'desktop_roots', return_value=[desktop]), \
+             contextlib.redirect_stdout(io.StringIO()) as stdout:
+            status = dl.main(['--input-file', str(desktop / 'share.txt')])
+        self.assertEqual(status, 1)
+        self.assertEqual(json.loads(stdout.getvalue())['code'], 'desktop_staging_forbidden')
+        self.assertFalse(desktop.exists())
+
+    def test_cross_drive_promotion_stays_exclusive(self):
+        target = self.output / 'new.mp4'
+        with patch.object(dl.os, 'link', side_effect=OSError(errno.EXDEV, 'cross-device')):
+            dl.promote_exclusive(self.fixture, target)
+            with self.assertRaises(FileExistsError):
+                dl.promote_exclusive(self.video_only, target)
+        self.assertEqual(target.read_bytes(), self.plain)
+
+    def test_cross_drive_interrupted_copy_removes_only_own_partial(self):
+        target = self.output / 'partial.mp4'
+        original = self.output / 'keep.mp4'
+        original.write_bytes(b'user-original')
+        def interrupted(source, output):
+            output.write(b'partial')
+            raise OSError('disk full')
+        with patch.object(dl.os, 'link', side_effect=OSError(errno.EXDEV, 'cross-device')), \
+             patch.object(dl.shutil, 'copyfileobj', side_effect=interrupted):
+            with self.assertRaises(OSError):
+                dl.promote_exclusive(self.fixture, target)
+        self.assertFalse(target.exists())
+        self.assertEqual(original.read_bytes(), b'user-original')
 
     def test_existing_file_not_overwritten(self):
         name = dl.safe_name('抖音_' + self.profile['title']) + '_[fixture-id].mp4'
@@ -110,7 +189,7 @@ class DownloadAcceptance(unittest.TestCase):
         with patch.object(dl.urllib.request, 'urlopen', return_value=ShortResponse(self.plain)):
             result = dl.save_one(self.url, self.output, self.args)
         self.assertEqual(Path(result['path']).read_bytes(), self.plain)
-        self.assertNotIn('private', Path(result['path']).with_suffix('.source.json').read_text(encoding='utf-8'))
+        self.assertEqual(list(self.output.iterdir()), [Path(result['path'])])
 
     def test_non_video_rejected_without_residue(self):
         self.args.local_media = self.base / 'invalid.mp4'
@@ -162,10 +241,13 @@ class DownloadAcceptance(unittest.TestCase):
     def test_different_direct_links_reuse_legacy_record(self):
         self.profile['id'] = '123'
         result = self.save()
-        sidecar = Path(result['path']).with_suffix('.source.json')
-        record = json.loads(sidecar.read_text(encoding='utf-8'))
-        record.pop('video_id')  # Compatibility with the previously installed version.
-        sidecar.write_text(json.dumps(record), encoding='utf-8')
+        # Old sidecars remain readable even when the video was renamed.
+        saved = Path(result['path'])
+        renamed = saved.with_name('renamed.mp4')
+        saved.rename(renamed)
+        record = {'platform': 'douyin', 'video_id': '123', 'file': renamed.name}
+        (self.output / 'legacy.source.json').write_text(json.dumps(record), encoding='utf-8')
+        result['path'] = str(renamed)
         with patch.object(dl, 'douyin_download', side_effect=AssertionError('no network needed')):
             reused = dl.save_one('https://www.douyin.com/share/video/123?tracking=other', self.output, self.args)
         self.assertEqual(reused['path'], result['path'])
@@ -200,8 +282,11 @@ class DownloadAcceptance(unittest.TestCase):
         self.assertEqual(observed, [('metadata', False), ('media', True), ('metadata', False)])
         self.assertEqual([r['status'] for r in results], ['downloaded', 'already_exists'])
         self.assertEqual(results[0]['path'], results[1]['path'])
-        record = json.loads(next(self.output.glob('*.source.json')).read_text(encoding='utf-8'))
-        self.assertEqual(record['video_id'], '123')
+        self.assertEqual(list(self.output.iterdir()), [Path(results[0]['path'])])
+        with patch.object(dl, 'douyin_download', side_effect=AssertionError('no media transfer')):
+            reused = dl.save_one('https://www.douyin.com/video/123', self.output, self.args)
+        self.assertEqual(reused['status'], 'already_exists')
+
 
     def test_corrupt_existing_media_is_not_reused(self):
         original = Path(self.save()['path'])
@@ -273,17 +358,21 @@ class DownloadAcceptance(unittest.TestCase):
         return manifest
 
     def test_browser_pair_muxes_original_codecs_and_reuses_identity(self):
-        self.make_manifest()
+        manifest = self.make_manifest()
+        manifest_bytes = manifest.read_bytes()
+        stages = []
         def transfer(url, target, **kwargs):
+            stages.append(target.parent)
+            self.assertEqual(target.parent.parent.resolve(), Path(tempfile.gettempdir()).resolve())
             shutil.copyfile(self.video_only if '/video?' in url else self.audio_only, target)
         with patch('browser_manifest.media_download', side_effect=transfer) as transfers:
             result = dl.save_one('https://www.douyin.com/video/123', self.output, self.args)
         self.assertEqual(transfers.call_count, 2)
         self.assertEqual(result['codec'], 'h264')
         self.assertEqual(result['audio_codecs'], ['aac'])
-        sidecar = Path(result['path']).with_suffix('.source.json').read_text(encoding='utf-8')
-        self.assertNotIn('private', sidecar)
-        self.assertEqual(json.loads(sidecar)['source_url'], 'https://www.douyin.com/video/123')
+        self.assertTrue(all(not stage.exists() for stage in stages))
+        self.assertEqual(manifest.read_bytes(), manifest_bytes)  # Caller owns cleanup/recovery decision.
+        self.assertEqual(set(self.output.iterdir()), {manifest, Path(result['path'])})
         with patch('browser_manifest.media_download', side_effect=AssertionError('must reuse')):
             reused = dl.save_one('https://www.douyin.com/share/video/123', self.output, self.args)
         self.assertEqual(reused['status'], 'already_exists')

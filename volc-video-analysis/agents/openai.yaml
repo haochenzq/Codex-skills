@@ -1,7 +1,7 @@
 interface:
   display_name: "火山视频分析"
-  short_description: "分析本地视频、转写音频并汇总多视频，默认使用豆包录音识别2.0"
-  default_prompt: "使用 $volc-video-analysis 分析我指定的视频，先准备本地任务并给出调用范围。"
+  short_description: "分析本地视频、转写音频或汇总多视频，按任务选用已有服务与证据"
+  default_prompt: "使用 $volc-video-analysis 处理我指定的视频分析任务，复用已有结果，只准备尚缺的分析。"
 dependencies:
   tools:
     - type: "mcp"

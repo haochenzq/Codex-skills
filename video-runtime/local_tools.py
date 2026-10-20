@@ -58,12 +58,24 @@ def doctor():
              'manim_python': CODEX_DIR/'runtimes/personal-video/manim/venv/Scripts/python.exe',
              'latex': CODEX_DIR/'runtimes/personal-video/manim/TinyTeX/bin/windows/latex.exe',
              'dvisvgm': CODEX_DIR/'runtimes/personal-video/manim/TinyTeX/bin/windows/dvisvgm.exe',
-             'remotion_package': REMOTION / 'node_modules' / 'remotion' / 'package.json'}
+             'remotion_package': REMOTION / 'node_modules' / 'remotion' / 'package.json',
+             'remotion_three_package': REMOTION / 'node_modules/@remotion/three/package.json',
+             'three_package': REMOTION / 'node_modules/three/package.json',
+             'fiber_package': REMOTION / 'node_modules/@react-three/fiber/package.json'}
     report = {k: {'path': str(v), 'exists': v.is_file()} for k,v in paths.items()}
     if paths['remotion_package'].is_file():
         report['remotion_version'] = json.loads(paths['remotion_package'].read_text(encoding='utf-8'))['version']
+    manifest = json.loads((REMOTION / 'package.json').read_text(encoding='utf-8'))['dependencies']
+    versions = {name: json.loads((REMOTION / 'node_modules' / name / 'package.json').read_text(encoding='utf-8'))['version']
+                for name in ('@remotion/three', 'three', '@react-three/fiber', 'react')
+                if (REMOTION / 'node_modules' / name / 'package.json').is_file()}
+    report['remotion_3d_versions'] = versions
+    report['remotion_3d_ready'] = (all(versions.get(n) == manifest.get(n) for n in ('@remotion/three', 'three', '@react-three/fiber', 'react'))
+                                  and versions.get('@remotion/three') == report.get('remotion_version'))
+    from blender_tools import dependency_status
+    report['blender'] = dependency_status()
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if all(x['exists'] for x in report.values() if isinstance(x,dict)) else 1
+    return 0 if report['remotion_3d_ready'] and all(x['exists'] for x in report.values() if isinstance(x,dict) and 'exists' in x) else 1
 
 
 def load_video_use():
@@ -221,10 +233,14 @@ def main():
         sys.stdout.reconfigure(encoding='utf-8')
     if sys.argv[1:2] == ['manim']:
         return invoke([PYTHON,CODEX_DIR/'runtimes/personal-video/run_manim.py',*sys.argv[2:]])
+    if sys.argv[1:2] == ['blender']:
+        return subprocess.run([str(PYTHON),'-X','utf8',str(ROOT/'blender_tools.py'),*sys.argv[2:]],
+                              env=environment()).returncode
     p = argparse.ArgumentParser(description='Remotion + video-use local entry; no cloud calls')
     commands = p.add_subparsers(dest='command',required=True)
     commands.add_parser('doctor')
     commands.add_parser('manim',help='Pass arguments to the shared Manim CLI')
+    commands.add_parser('blender',help='Blender start, status, render and verify; use blender --help')
     production=commands.add_parser('production')
     production.add_argument('timeline')
     production.add_argument('output',nargs='?')

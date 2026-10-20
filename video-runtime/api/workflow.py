@@ -68,7 +68,8 @@ AV_PROMPT = '''分析这个带真实音轨的视频片段，只输出JSON。素�
 "sound_events":[{"start":0,"end":1,"description":"环境声、音效或非语言人声及声音依据"}],
 "av_relations":[{"start":0,"end":1,"description":"声音与画面事件、剪切、情绪的关系及两边依据"}],
 "editing_suggestions":["基于视听证据的建议"]}。
-events/highlights条目也用start/end/description。没有听到某类声音则该数组为空；不确定就明确说明，不猜曲名、声源或人物内心。
+所有字段都必须保留；scenes/events/highlights的每个条目必须是包含start/end/description的对象，不能把字段名或描述拆成数组项。
+没有听到某类声音则该数组为空；没有人声也必须输出speech_tone:[]，不能省略。不确定就明确说明，不猜曲名、声源或人物内心。
 精确转写和词级时间戳另由豆包ASR提供，不在这里重复转写；这里的声音事件时间是估计，不代替ASR词边界。'''
 
 def dump(path: Path, value):
@@ -104,6 +105,12 @@ def probe(path: Path):
             "has_video": any(s.get("codec_type") == "video" for s in info.get("streams", [])),
             "has_audio": any(s.get("codec_type") == "audio" for s in info.get("streams", []))}
 
+def av_proxy_duration(source_duration: float):
+    # Analysis-only silent tail. Odd tenths avoid tiny residual audio chunks.
+    # Verified: a 12.842667s input failed with a 42.6875ms provider error;
+    # the same media padded to 13.1s succeeded. Provider internals are unknown.
+    return round(math.ceil(source_duration * 5 - 1e-9) / 5 + .1, 6)
+
 def fingerprint(path: Path):
     value = hashlib.sha256()
     with path.open("rb") as stream:
@@ -134,6 +141,11 @@ def overview(folder, job):
             "assets": len(job["assets"]), "clips": len(clips),
             "completed_asr_clips": sum(c["asr"]["state"] == "done" for c in clips),
             "completed_visual_clips": sum(c["visual"]["state"] == "done" for c in clips),
+            "reviewed_visual_clips": sum("local_review" in c["visual"].get("result", {}) for c in clips),
+            "visual_review_notes": [{"clip_id": c["id"],
+                **{k: c["visual"]["result"]["local_review"][k] for k in
+                   ("review_note", "field_status", "request_id", "new_cloud_calls")}}
+                for c in clips if "local_review" in c["visual"].get("result", {})],
             "planned_paid_requests": job["planned_paid_requests"],
             "paid_requests_attempted": job.get("paid_requests_attempted", 0),
             "service_plan": {
@@ -144,7 +156,7 @@ def overview(folder, job):
                 "free_quota_verified": False,
                 "ark_file_uploads": sum(c["visual"]["state"] != "skip" for c in clips)
                     if job.get("visual_transport") == "ark_file_av" else 0,
-                "note": "Counts are potentially billable operations, not confirmed charges. Check current service quotas, expiry and cross-service permissions; model/speech gifts do not cover all MediaKit fees."},
+                "note": "Counts are planned service operations, not a bill. Select models by performance and task fit; account service permissions must support the chosen route."},
             "coverage": "Visual sampling, not exhaustive frame or shot detection",
             "artifacts": job.get("artifacts", []), "error": job.get("error")}
 
@@ -240,22 +252,42 @@ def prepare(paths: list[str], task: str = "video_analysis", profile: str = "stan
                 if task != "audio_transcription":
                     video = asset_folder / f"{index:04d}.mp4"
                     av = job["visual_transport"] == "ark_file_av" and asset["metadata"]["has_audio"]
+                    proxy_length = av_proxy_duration(length) if av else length
+                    proxy_padding = proxy_length - length
+                    proxy_common = common[:-2] + ["-t", str(proxy_length)]
+                    video_filter = "scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30"
+                    if av:
+                        video_filter += f",tpad=stop_mode=clone:stop_duration={proxy_padding + .05}"
                     audio_args = (["-map", "0:a:0", "-af", "aresample=async=1:first_pts=0,apad",
                                    "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"] if av else ["-an"])
-                    run_local(common + ["-map", "0:v:0", *audio_args, "-vf", "scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                    # Analysis-only MP4: do not inherit camera timecode/data tracks.
+                    # Keep the real audio timeline while normalizing the video clock.
+                    run_local(proxy_common + ["-map", "0:v:0", *audio_args,
+                                        "-map_metadata", "-1", "-map_chapters", "-1", "-write_tmcd", "0",
+                                        "-vf", video_filter,
                                         "-c:v", "libx264", "-preset", "fast", "-crf", "28", "-pix_fmt", "yuv420p",
                                         "-movflags", "+faststart", str(video)])
                     video_info = probe(video)
                     if video_info["bytes"] > 25 * 1024**2:
                         raise ValueError("Proxy chunk exceeds 25MB; use shorter chunks")
+                    if any(stream.get("codec_type") not in {"video", "audio"}
+                           for stream in video_info["streams"]):
+                        raise ValueError("Analysis proxy contains unexpected non-audiovisual tracks")
                     if av and not video_info["has_audio"]:
                         raise ValueError("Audiovisual proxy lost its audio track")
+                    if av:
+                        audio_stream = next(stream for stream in video_info["streams"]
+                                            if stream.get("codec_type") == "audio")
+                        audio_length = float(audio_stream.get("duration", 0))
+                        if not math.isfinite(audio_length) or abs(audio_length - proxy_length) > .05:
+                            raise ValueError("Proxy audio track duration differs from planned padded interval")
                     clip["video_path"] = str(video)
                     clip["video_sha256"] = fingerprint(video)
                     clip["visual"] = {"state": "pending"}
                     clip["has_audio"] = av
                     clip["proxy_duration"] = video_info["duration"]
-                    if abs(video_info["duration"] - length) > .25:
+                    clip["proxy_padding_seconds"] = proxy_padding
+                    if abs(video_info["duration"] - proxy_length) > .05:
                         raise ValueError("Proxy duration differs from planned source interval")
                 job["clips"].append(clip)
                 dump(folder / "job.json", job)
@@ -438,7 +470,7 @@ def merge(folder, job):
         data = {"asset_id": asset["id"], "source": asset["source"], "source_sha256": asset["sha256"],
                 "duration": asset["metadata"]["duration"], "name": asset["name"],
                 "transcript": [], "scenes": [], "events": [], "ocr": [], "highlights": [],
-                "summaries": [], "editing_suggestions": [], "raw_results": [],
+                "summaries": [], "editing_suggestions": [], "raw_results": [], "visual_reviews": [],
                 **{key: [] for key in AV_FIELDS}}
         source_clips = [c for c in job["clips"] if c["asset_id"] == asset["id"]]
         data["stage_states"] = [{"clip_id": c["id"], "asr": c["asr"]["state"],
@@ -458,6 +490,9 @@ def merge(folder, job):
                 data["transcript"] += clip["asr"]["segments"]
             if clip["visual"]["state"] == "done":
                 visual = clip["visual"]["result"]
+                if "local_review" in visual:
+                    data["visual_reviews"].append({"clip_id": clip["id"], "start": clip["start"],
+                        "end": clip["start"] + clip["duration"], **visual["local_review"]})
                 for field in ("scenes", "events", "ocr", "highlights", "editing_suggestions"):
                     data[field] += visual[field]
                 for field in AV_FIELDS:
@@ -498,6 +533,9 @@ def merge(folder, job):
         for item in video["summaries"]:
             lines += [f"- {item['start']:.2f}–{item['end']:.2f} 秒：{item['text']}"]
         lines += ["", "音频理解：" + video["audio_understanding"]]
+        for review in video["visual_reviews"]:
+            lines += ["", f"本地审阅恢复 {review['clip_id']}：{review['review_note']}",
+                      "原模型字段缺失与整理来源见JSON的visual_reviews；原始回执未改写。"]
         no_speech = [c for c in video["asr_outcomes"] if c["speech_status"] == "no_speech"]
         if no_speech:
             lines += ["", "ASR未检测到人声的片段（不代表没有音乐或音效）：",
@@ -582,6 +620,149 @@ def recover_no_speech(job_id: str, clip_id: str):
         lock.unlink()
 
 
+def reviewed_no_speech_model_basis(data, clip):
+    """Conservative model-audio corroboration for an explicit local review only.
+
+    Visual people, OCR, dialogue bubbles and instrumental background alone are
+    not evidence. The caller must also validate the same clip's native terminal.
+    """
+    summary = data.get("summary")
+    if not isinstance(summary, str):
+        raise ValueError("Missing model summary for no-speech review")
+    audio_texts = []
+    for field in ("music", "sound_events", "av_relations"):
+        items = data.get(field)
+        if not isinstance(items, list) or not all(isinstance(i, dict) and
+                isinstance(i.get("description"), str) for i in items):
+            raise ValueError("Missing structured model audio evidence: " + field)
+        audio_texts += [(field, i["description"]) for i in items]
+    texts = [("summary", summary), *audio_texts]
+    absent = r"(?:没有|未听到|听不到|无)(?:任何)?(?:人声|语音|旁白|歌声)"
+    # An explicit absence claim must not hide its own negation or another vocal claim.
+    for field, text in texts:
+        if re.search(r"(?:并非|并不是|不是|不能说|不代表)(?:完全)?(?:没有|无|未听到)", text):
+            raise ValueError("Model audio evidence reverses a no-speech claim")
+        cleaned = re.sub(absent, "", text)
+        voice = r"人声|语音|旁白|歌声|男声|女声|口播|朗读|低语|哼唱|清唱|吟唱|对白|说话声|解说声|笑声|哭声|喘息|欢呼声"
+        if field != "summary":
+            voice += r"|说话|对话|演唱|唱歌|讲述|朗诵|念白"
+        if re.search(voice, cleaned):
+            raise ValueError("Model audio evidence conflicts with no-speech review")
+    explicit = re.search(absent, summary)
+    if explicit:
+        if re.search(r"推测|可能|似乎|疑似|或许|不确定", summary):
+            raise ValueError("Model no-voice statement is uncertain")
+        return {"basis": "explicit_no_voice", "model_fields": ["summary"], "phrase": explicit.group()}
+    # Pure music as a full-clip description, not just an instrumental backing track.
+    music = data["music"]
+    if ("纯音乐" not in summary or not music or data["sound_events"] != [] or
+            any("纯音乐" not in i["description"] for i in music) or
+            any(re.search(r"推测|可能|似乎|疑似|或许|不确定|(?:并非|不是|并不是|非)纯音乐", text)
+                for field, text in texts if field in {"summary", "music"})):
+        raise ValueError("Model does not explicitly corroborate full-clip pure music")
+    spans = timed(music, clip)
+    covered_to = clip["start"]
+    for span in sorted(spans, key=lambda i: i["start"]):
+        if span["start"] > covered_to + .25:
+            raise ValueError("Pure-music evidence does not cover the whole reviewed clip")
+        covered_to = max(covered_to, span["end"])
+    if covered_to < clip["start"] + clip["duration"] - .25:
+        raise ValueError("Pure-music evidence covers only part of the reviewed clip")
+    return {"basis": "full_clip_pure_music", "model_fields": ["summary", "music", "sound_events", "av_relations"],
+            "phrase": "纯音乐", "start": clip["start"], "end": clip["start"] + clip["duration"]}
+
+
+def recover_visual(job_id: str, clip_id: str, review_note: str):
+    """Explicit local review of two unambiguous defects; never retry cloud inference.
+
+    Only reattach a single split scene description and/or mark omitted speech_tone
+    not applicable with matching native no_speech AND explicit model evidence.
+    Normal parse_visual stays strict; all other fields must already be complete.
+    """
+    if not isinstance(review_note, str) or not review_note.strip():
+        raise ValueError("An explicit review note is required")
+    folder, _ = load(job_id)
+    lock = folder / ".advance.lock"
+    with lock.open("x"):
+        pass
+    try:
+        folder, job = load(job_id)
+        clip = next(c for c in job["clips"] if c["id"] == clip_id)
+        visual = clip["visual"]
+        if visual["state"] == "done" and "local_review" in visual.get("result", {}):
+            return overview(folder, job)
+        if job["state"] != "needs_review" or visual["state"] != "call_started":
+            raise ValueError("Recovery requires a reviewed visual call with retained response")
+        if job.get("cross_summary") == "call_started" or any(
+                stage["state"].endswith("_started") for c in job["clips"]
+                for stage in (c["asr"], c["visual"]) if stage is not visual):
+            raise ValueError("Another interrupted stage requires separate review")
+        if fingerprint(Path(clip["video_path"])) != clip["video_sha256"]:
+            raise ValueError("Prepared video changed; cannot recover this response")
+        raw = folder / "raw" / (clip_id + "_visual.json")
+        retained = json.loads(raw.read_text(encoding="utf-8"))
+        if (retained.get("ok") is not True or not 200 <= retained.get("http_status", 0) < 300
+                or not retained.get("request_id")):
+            raise ValueError("Retained visual request is failed or uncertain")
+        choice = retained["body"]["choices"][0]
+        if choice.get("finish_reason") != "stop":
+            raise ValueError("Retained visual output is incomplete")
+        data = json.loads(choice["message"]["content"])
+        changes, field_status, supporting = [], {}, []
+        scenes = data.get("scenes")
+        if (isinstance(scenes, list) and len(scenes) == 3 and isinstance(scenes[0], dict)
+                and set(scenes[0]) == {"start", "end"} and scenes[1] == "description"
+                and isinstance(scenes[2], str) and scenes[2].strip()):
+            data["scenes"] = [{**scenes[0], "description": scenes[2]}]
+            changes.append({"field": "scenes", "source": "local_structure_review",
+                            "action": "reattach existing description to its sole timed scene; no new content"})
+        if clip.get("av_input") and "speech_tone" not in data:
+            asr = clip["asr"]
+            if (asr_backend(job) not in NATIVE_ASR or asr["state"] != "done" or
+                    asr.get("speech_status") != "no_speech" or asr.get("segments") != []):
+                raise ValueError("Missing speech_tone cannot be inferred without matching explicit no-speech evidence")
+            model_basis = reviewed_no_speech_model_basis(data, clip)
+            if fingerprint(Path(clip["audio_path"])) != clip["audio_sha256"]:
+                raise ValueError("Prepared audio changed; cannot infer not-applicable speech tone")
+            suffix = "_asr_submit.json" if asr_backend(job) == "doubao_turbo" else "_asr_query.json"
+            speech_raw = folder / "raw" / (clip_id + suffix)
+            speech = json.loads(speech_raw.read_text(encoding="utf-8"))
+            if speech.get("request_id") != asr.get("request_id") or not speech.get("request_id"):
+                raise ValueError("No-speech evidence request does not match the saved stage")
+            finish_native_asr(dict(asr), dict(speech, ok=True, state="no_speech"), clip)
+            supporting.append({"raw_result": str(speech_raw), "raw_sha256": fingerprint(speech_raw),
+                "request_id": speech["request_id"], "task_id": speech["task_id"], "provider_code": speech["provider_code"]})
+            data["speech_tone"] = []
+            field_status["speech_tone"] = {"status": "not_applicable", "original_field": "missing",
+                "source": "local_review_using_native_asr_and_model_audio_evidence", "model_emitted_field": False,
+                "model_basis": model_basis}
+            changes.append({"field": "speech_tone", "source": "local_evidence_review",
+                            "action": "mark omitted field not applicable; no speech tone invented"})
+        if not changes:
+            raise ValueError("No supported unambiguous local repair; retain partial evidence for review")
+        view = json.loads(json.dumps(retained))
+        view["body"]["choices"][0]["message"]["content"] = json.dumps(data, ensure_ascii=False)
+        parsed = parse_visual(view, clip)
+        review = {"time": time.time(), "review_note": review_note.strip(), "changes": changes,
+            "field_status": field_status, "supporting_evidence": supporting,
+            "raw_result": str(raw), "raw_sha256": fingerprint(raw),
+            "request_id": retained["request_id"], "new_cloud_calls": 0}
+        parsed["local_review"] = review
+        backup = folder / (clip_id + "_job.before-visual-recovery.json")
+        with backup.open("x", encoding="utf-8") as stream:
+            stream.write((folder / "job.json").read_text(encoding="utf-8"))
+        dump(folder / (clip_id + "_visual.reviewed.json"), {"clip_id": clip_id, "parsed_result": parsed})
+        visual.update(state="done", result=parsed, request_id=retained["request_id"])
+        job.setdefault("manual_reviews", []).append({"clip_id": clip_id, "action": "local visual recovery",
+            "previous_error": job.pop("error", None), **review})
+        job["state"] = "processing"
+        merge(folder, job)
+        dump(folder / "job.json", job)
+        return overview(folder, job)
+    finally:
+        lock.unlink()
+
+
 async def advance(job_id: str, allow_paid_calls: bool = False, api=None):
     folder, job = load(job_id)
     if job["state"] == "completed":
@@ -589,7 +770,7 @@ async def advance(job_id: str, allow_paid_calls: bool = False, api=None):
     if job["state"] not in {"prepared", "processing", "waiting"}:
         return overview(folder, job)
     if not allow_paid_calls:
-        return {**overview(folder, job), "action_required": "Approve this job's uploads and paid requests before advancing.",
+        return {**overview(folder, job), "action_required": "Set allow_paid_calls=true under the standing permission for task-needed analysis and uploads; no per-call confirmation is needed.",
                 "data_destination": "Volcengine MediaKit, Doubao Voice (doubao2 backend), and Ark; prepared media/evidence only",
                 "money_limit_supported": False, "limits": "Request count, sampled frames, pixels and output tokens are bounded; no automatic retry."}
     lock = folder / ".advance.lock"
@@ -780,6 +961,9 @@ async def advance(job_id: str, allow_paid_calls: bool = False, api=None):
                 if av_input:
                     media_input = {"file_id": visual["file_id"]}
                     prompt = AV_PROMPT + ("\n本视频没有音轨，四类声音数组必须为空。" if not clip["has_audio"] else "")
+                    if clip.get("proxy_padding_seconds", 0):
+                        prompt += (f"\n分析副本末尾补齐了{clip['proxy_padding_seconds']:.3f}秒静音和最后画面，仅作接口兼容。"
+                                   f"原片有效时长为{clip['duration']:.3f}秒，忽略补齐段，事件时间不得超过原片有效时长。")
                 else:
                     media_input = {"url": "data:video/mp4;base64," + base64.b64encode(path.read_bytes()).decode("ascii"),
                                    "fps": job["fps"], "max_frames": job["max_frames"], "max_pixels": 409600}

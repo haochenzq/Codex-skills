@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
+from itertools import chain
 import http.cookiejar
 import json
 import math
@@ -13,7 +15,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,7 +23,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 VENDOR = SKILL_ROOT / 'runtime/python-packages'
 if VENDOR.is_dir():
     sys.path.insert(0, str(VENDOR))
-DEFAULT_OUTPUT = Path('D:/Codex项目文件夹/视频制作/素材')
+DEFAULT_OUTPUT = Path.cwd()
 FFMPEG = SKILL_ROOT / 'runtime/ffmpeg/ffmpeg.exe'
 FFPROBE = FFMPEG.with_name('ffprobe.exe')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -32,6 +33,49 @@ TRAILING = '.,;!，。；！）)]}》”’'
 from download_errors import DownloadError
 from media_downloader import media_download
 from browser_manifest import duration_tolerance, import_stream_pair
+
+def desktop_roots():
+    """Include redirected Windows desktops, without changing browser settings."""
+    roots = [Path.home() / 'Desktop', Path.home() / '桌面']
+    if os.name == 'nt':
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders') as key:
+                roots.append(Path(os.path.expandvars(winreg.QueryValueEx(key, 'Desktop')[0])))
+        except OSError:
+            pass
+    return [p.resolve() for p in roots]
+
+
+def check_temporary_path(path):
+    resolved = Path(path).resolve()
+    if any(resolved.is_relative_to(root) for root in desktop_roots()):
+        raise DownloadError('desktop_staging_forbidden', '桌面不能用于下载暂存、分享输入或签名清单；请使用系统临时目录或 --temp-dir 指定的项目任务暂存目录。')
+    return resolved
+
+
+def temporary_parent(args):
+    parent = check_temporary_path(getattr(args, 'temp_dir', None) or tempfile.gettempdir())
+    parent.mkdir(parents=True, exist_ok=True)
+    return parent
+
+
+def promote_exclusive(path, destination):
+    """Keep exclusive admission when system temp and library are on different drives."""
+    try:
+        os.link(path, destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV and getattr(exc, 'winerror', None) != 17:
+            raise
+        with destination.open('xb') as output:
+            try:
+                with path.open('rb') as source:
+                    shutil.copyfileobj(source, output)
+            except BaseException:
+                output.close()
+                destination.unlink()
+                raise
 
 def platform(url):
     try:
@@ -173,12 +217,17 @@ def video_id_from_url(url):
 
 
 class SourceIndex:
-    """One sidecar scan per batch; media is still verified at every reuse."""
+    """Index filenames once per batch; verify media at every reuse."""
     def __init__(self, output):
         self.output = output.resolve()
         self.requests = {}
         self.videos = {}
-        for sidecar in output.glob('*.source.json'):
+        for video in output.iterdir():
+            identity = re.fullmatch(r'抖音_.*_\[([^\[\]]+)\](?:_\d+)?\.[^.]+', video.name)
+            if identity and video.is_file():
+                self.add({'video_id': identity.group(1), 'file': video.name})
+        # Read old records for compatibility; never create new sidecars.
+        for sidecar in chain((output / '来源记录').glob('*.source.json'), output.glob('*.source.json')):
             try:
                 record = json.loads(sidecar.read_text(encoding='utf-8'))
                 if not isinstance(record, dict) or record.get('platform') != 'douyin':
@@ -225,14 +274,17 @@ def save_one(url, output, args, source_index=None):
         raise DownloadError('video_id_mismatch', '备用媒体的视频ID与源链接不一致。')
     known_id = direct_id or supplied_id
     manifest = getattr(args, 'browser_manifest', None)
+    for auxiliary in (manifest, getattr(args, 'local_media', None)):
+        if auxiliary:
+            check_temporary_path(auxiliary)
     expected_duration = getattr(args, 'expected_duration', None)
     require_audio = bool(manifest) or getattr(args, 'require_audio', False)
     if manifest and (not known_id or not re.fullmatch(r'[0-9]+', known_id) or not expected_duration):
         raise DownloadError('browser_identity_required', '分轨清单须绑定明确的视频ID及当前播放器完整时长。')
-    existing = source_index.find(args.ffprobe, request_id, known_id, expected_duration, require_audio)
+    existing = source_index.find(args.ffprobe, request_id, known_id or request_id, expected_duration, require_audio)
     if existing:
         return existing
-    with tempfile.TemporaryDirectory(prefix='.download-', dir=output) as temporary:
+    with tempfile.TemporaryDirectory(prefix='social-video-download-', dir=temporary_parent(args)) as temporary:
         stage = Path(temporary)
         if manifest:
             path = import_stream_pair(manifest, stage, args.ffprobe, expected_duration)
@@ -264,26 +316,12 @@ def save_one(url, output, args, source_index=None):
         # Hard-link promotion is exclusive, preventing overwrite even if another process races.
         while True:
             try:
-                os.link(path, destination)
+                promote_exclusive(path, destination)
                 break
             except FileExistsError:
                 destination = output / (stem + f'_{counter}' + path.suffix)
                 counter += 1
-        record = {'request_id': request_id, 'platform': kind, 'file': destination.name,
-                  'title': profile['title'], 'author': profile.get('author', ''), **verified,
-                  'saved_at': time.strftime('%Y-%m-%dT%H:%M:%S%z')}
-        if known_id:
-            record['video_id'] = known_id
-            if re.fullmatch(r'[0-9]+', known_id):
-                record['source_url'] = 'https://www.douyin.com/video/' + known_id
-        if expected_duration:
-            record['expected_duration_seconds'] = expected_duration
-        if manifest:
-            record['acquisition'] = 'browser_observed_stream_pair'
-        # Source sidecar deliberately excludes signed media URLs and cookies.
-        with destination.with_suffix('.source.json').open('x', encoding='utf-8') as stream:
-            json.dump(record, stream, ensure_ascii=False, indent=2)
-        source_index.add(record)
+        source_index.add({'request_id': request_id, 'video_id': profile['id'], 'file': destination.name})
         return {'status': 'downloaded', 'platform': kind, 'path': str(destination.resolve()), **verified}
 
 def main(argv=None):
@@ -291,6 +329,7 @@ def main(argv=None):
     parser.add_argument('text', nargs='*', help='分享链接或包含链接的分享文案')
     parser.add_argument('--input-file', type=Path, help='UTF-8 分享文案文件；避免 shell 转义问题')
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument('--temp-dir', type=Path, help='项目任务暂存父目录；默认系统临时目录，禁止桌面')
     parser.add_argument('--cookies-file', type=Path, help='抖音 Netscape Cookie 文件')
     parser.add_argument('--ffprobe', type=Path, default=FFPROBE)
     media_group = parser.add_mutually_exclusive_group()
@@ -331,6 +370,11 @@ def main(argv=None):
         return 0 if passed else 1
     text = '\n'.join(args.text)
     if args.input_file:
+        try:
+            check_temporary_path(args.input_file)
+        except DownloadError as exc:
+            print(json.dumps({'status': 'failed', 'code': exc.code, 'message': str(exc)}, ensure_ascii=False))
+            return 1
         text += '\n' + args.input_file.read_text(encoding='utf-8-sig')
     links = extract_links(text)
     if not links:

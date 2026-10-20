@@ -23,6 +23,8 @@
 
 ## 原版helpers
 
+表中参数只是接口说明，不是裸命令调用建议。优先使用共享入口的 `video-use`、`timeline` 等命令；确需直接调用其他helper时，使用公共运行说明指定的Codex内置Python，并仅在当前子进程PATH中加入共享 `native/ffmpeg/`。按该helper的实际import检查依赖；不得切换到任意Python、借用其他技能包或修改系统PATH。上游转写脚本保留兼容但不作为本机运行路线。
+
 | 工具 | 用途与边界 |
 | --- | --- |
 | `helpers/render.py <EDL> -o <output>` | 原版片段提取、拼接、叠加、字幕；`--preview`、`--build-subtitles`、`--no-subtitles`详见自身帮助。本机实际渲染优先Windows适配入口。 |

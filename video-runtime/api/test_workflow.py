@@ -20,6 +20,162 @@ from mediakit import MediaKit, MEDIAKIT_TOOLS_BASE
 import workflow
 
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
+    def pure_music_model_fixture(self):
+        return {"summary": "动画科普，全程无真人出镜，搭配情感类纯音乐烘托氛围", "scenes": [],
+                "events": [], "ocr": [], "highlights": [], "editing_suggestions": [],
+                "music": [{"start": 0, "end": 2, "description": "纯音乐，钢琴为主旋律"}],
+                "sound_events": [], "av_relations": []}
+
+    def test_pure_music_review_restores_only_matching_no_speech_and_keeps_raw(self):
+        folder, job, clip, raw, response, old = self.reviewed_visual_fixture()
+        payload = self.pure_music_model_fixture()
+        payload["music"][0]["end"] = clip["duration"]
+        response["body"]["choices"][0]["message"]["content"] = json.dumps(payload)
+        workflow.dump(raw, response)
+        raw_bytes = raw.read_bytes()
+        with patch.object(workflow, "VolcAPI", side_effect=AssertionError("No cloud calls")):
+            status = workflow.recover_visual(job["job_id"], clip["id"], "Explicit pure music and matching native no_speech reviewed")
+        self.assertEqual(status["state"], "processing")
+        self.assertEqual(status["paid_requests_attempted"], 4)
+        self.assertEqual(raw.read_bytes(), raw_bytes)
+        note = status["visual_review_notes"][0]["field_status"]["speech_tone"]
+        self.assertEqual(note["model_basis"]["basis"], "full_clip_pure_music")
+        self.assertEqual(note["original_field"], "missing")
+        self.assertFalse(note["model_emitted_field"])
+        evidence = workflow.result(job["job_id"])["evidence"]["videos"][0]
+        self.assertEqual(evidence["visual_reviews"][0]["field_status"]["speech_tone"], note)
+
+    def test_pure_music_basis_rejects_narration_ambiguity_and_partial_coverage(self):
+        clip = {"asset_id": "asset", "id": "clip", "start": 60, "duration": 2}
+        cases = {
+            "no_visible_person_only": {"summary": "全程无真人出镜，搭配背景音乐"},
+            "background_music_only": {"summary": "科普动画配钢琴背景音乐"},
+            "narration_in_summary": {"summary": "纯音乐伴奏中有旁白"},
+            "negated_no_voice": {"summary": "并非没有人声，配纯音乐"},
+            "negated_pure_music": {"summary": "这不是纯音乐"},
+            "uncertain_no_voice": {"summary": "可能没有人声"},
+            "uncertain_pure_music": {"summary": "疑似纯音乐"},
+            "music_has_vocals": {"music": [{"start": 0, "end": 2, "description": "纯音乐伴奏，夹杂歌声"}]},
+            "music_not_explicit": {"music": [{"start": 0, "end": 2, "description": "钢琴配乐"}]},
+            "partial_music": {"music": [{"start": 0, "end": 1, "description": "纯音乐"}]},
+            "music_gap": {"music": [{"start": 0, "end": .5, "description": "纯音乐"},
+                                    {"start": 1, "end": 2, "description": "纯音乐"}]},
+            "voice_sound_event": {"sound_events": [{"start": 0, "end": 1, "description": "听到说话声"}]},
+            "vocal_av_relation": {"av_relations": [{"start": 0, "end": 1, "description": "听到对话，与字幕对应"}]},
+            "explicit_none_but_vocals": {"summary": "没有人声", "sound_events": [{"description": "人声哼唱"}]},
+        }
+        for name, fields in cases.items():
+            with self.subTest(case=name):
+                data = {**self.pure_music_model_fixture(), **fields}
+                with self.assertRaises(ValueError): workflow.reviewed_no_speech_model_basis(data, clip)
+        # OCR and visual speech bubbles describe visible writing, not heard speech.
+        data = self.pure_music_model_fixture()
+        data["ocr"] = [{"start": 0, "end": 1, "text": "人物对话与旁白"}]
+        self.assertEqual(workflow.reviewed_no_speech_model_basis(data, clip)["basis"], "full_clip_pure_music")
+        data["summary"] = "动画片段，无人声"
+        self.assertEqual(workflow.reviewed_no_speech_model_basis(data, clip)["basis"], "explicit_no_voice")
+
+    def reviewed_visual_fixture(self):
+        prepared = workflow.prepare([str(self.fixture())], clip_seconds=10,
+            asr_backend_name="doubao_turbo", summary_backend_name="local")
+        folder, job = workflow.load(prepared["job_id"])
+        clip = job["clips"][1]
+        clip["av_input"] = True
+        clip["asr"].update(state="done", speech_status="no_speech", segments=[],
+                           request_id="asr-confirmed", task_id="asr-task")
+        (folder / "raw").mkdir(exist_ok=True)
+        speech = {"ok": True, "state": "no_speech", "http_status": 200, "provider_code": "20000003",
+            "request_id": "asr-confirmed", "task_id": "asr-task", "body": {"result": {"text": ""},
+            "audio_info": {"duration": clip["duration"] * 1000}}}
+        workflow.dump(folder / "raw" / (clip["id"] + "_asr_submit.json"), speech)
+        clip["visual"].update(state="call_started", file_id="retained-file")
+        data = {"summary": "纯音乐，没有人声", "scenes": [{"start": 0, "end": 1}, "description", "蓝色画面"],
+            "events": [], "ocr": [{"start": 0, "end": 1, "text": "文字"}], "highlights": [],
+            "music": [{"start": 0, "end": 1, "description": "音乐"}], "sound_events": [],
+            "av_relations": [], "editing_suggestions": []}
+        response = {"ok": True, "http_status": 200, "request_id": "visual-confirmed", "body": {
+            "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(data)}}]}}
+        raw = folder / "raw" / (clip["id"] + "_visual.json")
+        workflow.dump(raw, response)
+        job.update(state="needs_review", paid_requests_attempted=4, error="Missing structured visual evidence")
+        workflow.dump(folder / "job.json", job)
+        return folder, job, clip, raw, response, data
+
+    def test_visual_review_recovers_locally_preserves_provenance_and_timeline(self):
+        folder, job, clip, raw, response, data = self.reviewed_visual_fixture()
+        before_raw, before_job = raw.read_bytes(), (folder / "job.json").read_bytes()
+        with patch.object(workflow, "VolcAPI", side_effect=AssertionError("No cloud client allowed")):
+            status = workflow.recover_visual(job["job_id"], clip["id"], "Reviewed retained structure and no-speech evidence")
+        self.assertEqual(status["state"], "processing")
+        self.assertEqual(status["reviewed_visual_clips"], 1)
+        self.assertEqual(status["visual_review_notes"][0]["field_status"]["speech_tone"]["original_field"], "missing")
+        _, saved = workflow.load(job["job_id"])
+        self.assertEqual(saved["paid_requests_attempted"], 4)
+        self.assertEqual(saved["clips"][0], job["clips"][0])
+        visual = saved["clips"][1]["visual"]
+        self.assertEqual(visual["state"], "done")
+        self.assertEqual(visual["file_id"], "retained-file")
+        self.assertEqual(visual["request_id"], "visual-confirmed")
+        self.assertEqual(visual["result"]["scenes"][0]["description"], "蓝色画面")
+        self.assertEqual(visual["result"]["scenes"][0]["start"], clip["start"])
+        self.assertEqual(visual["result"]["speech_tone"], [])
+        review = visual["result"]["local_review"]
+        self.assertFalse(review["field_status"]["speech_tone"]["model_emitted_field"])
+        self.assertEqual(review["field_status"]["speech_tone"]["status"], "not_applicable")
+        self.assertEqual(review["raw_sha256"], workflow.fingerprint(raw))
+        self.assertEqual(raw.read_bytes(), before_raw)
+        self.assertEqual((folder / (clip["id"] + "_job.before-visual-recovery.json")).read_bytes(), before_job)
+        evidence = workflow.result(job["job_id"])["evidence"]["videos"][0]
+        self.assertFalse(evidence["complete"])
+        self.assertEqual(evidence["audio_understanding"], "partial")
+        self.assertEqual(evidence["visual_reviews"][0]["request_id"], "visual-confirmed")
+        after_job = (folder / "job.json").read_bytes()
+        workflow.recover_visual(job["job_id"], clip["id"], "Repeated review")
+        self.assertEqual((folder / "job.json").read_bytes(), after_job)
+
+    def test_visual_review_rejects_incomplete_ambiguous_or_unsupported_evidence(self):
+        folder, job, clip, raw, original, data = self.reviewed_visual_fixture()
+        baseline = (folder / "job.json").read_bytes()
+        cases = ["failed", "truncated", "ambiguous_scene", "missing_music", "invalid_timestamp",
+                 "missing_asr_status", "mismatched_asr", "asr_speech", "model_speech", "other_started"]
+        for case in cases:
+            with self.subTest(case=case):
+                response = json.loads(json.dumps(original))
+                payload = json.loads(json.dumps(data))
+                current = json.loads(baseline)
+                if case == "failed": response["ok"] = False
+                if case == "truncated": response["body"]["choices"][0]["finish_reason"] = "length"
+                if case == "ambiguous_scene": payload["scenes"].append("other description")
+                if case == "missing_music": del payload["music"]
+                if case == "invalid_timestamp": payload["events"] = [{"start": -1, "end": 1, "description": "bad"}]
+                if case == "missing_asr_status": current["clips"][1]["asr"]["speech_status"] = "empty_transcript"
+                if case == "mismatched_asr": current["clips"][1]["asr"]["request_id"] = "different"
+                if case == "asr_speech": current["clips"][1]["asr"]["segments"] = [{"text": "speech"}]
+                if case == "model_speech": payload["summary"] = "有人讲解"
+                if case == "other_started": current["clips"][0]["asr"]["state"] = "submit_started"
+                response["body"]["choices"][0]["message"]["content"] = json.dumps(payload)
+                workflow.dump(raw, response)
+                workflow.dump(folder / "job.json", current)
+                before = (folder / "job.json").read_bytes()
+                with self.assertRaises(ValueError):
+                    workflow.recover_visual(job["job_id"], clip["id"], "Review")
+                self.assertEqual((folder / "job.json").read_bytes(), before)
+                self.assertFalse((folder / (clip["id"] + "_visual.reviewed.json")).exists())
+                self.assertFalse((folder / ".advance.lock").exists())
+        with self.assertRaises(ValueError): workflow.parse_visual(original, clip)
+
+    def test_visual_review_keeps_existing_lock_and_rejects_changed_media(self):
+        folder, job, clip, raw, response, data = self.reviewed_visual_fixture()
+        lock = folder / ".advance.lock"
+        lock.write_text("owned by another process")
+        with self.assertRaises(FileExistsError): workflow.recover_visual(job["job_id"], clip["id"], "Review")
+        self.assertEqual(lock.read_text(), "owned by another process")
+        lock.unlink()
+        Path(clip["video_path"]).write_bytes(b"changed")
+        before = (folder / "job.json").read_bytes()
+        with self.assertRaises(ValueError): workflow.recover_visual(job["job_id"], clip["id"], "Review")
+        self.assertEqual((folder / "job.json").read_bytes(), before)
+
     async def test_turbo_no_speech_still_analyzes_music_and_ocr(self):
         prepared = workflow.prepare([str(self.fixture())], asr_backend_name="doubao_turbo", summary_backend_name="local")
         folder, job = workflow.load(prepared["job_id"])
@@ -240,6 +396,37 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(max(abs(v) for v in embedded[120000:]), 10)
         self.assertEqual(prepared["planned_paid_requests"], 4)
         self.assertEqual(prepared["asr_backend"], "doubao2")
+
+    def test_av_tail_padding_keeps_source_times_and_avoids_short_residuals(self):
+        self.assertEqual(workflow.av_proxy_duration(12.842667), 13.1)
+        for original in (.05, .1, .79, .8, 2, 12.8, 12.842667, 13.1, 32.157125, 120):
+            target = workflow.av_proxy_duration(original)
+            self.assertGreaterEqual(target - original, .099)
+            self.assertLessEqual(target - original, .301)
+            self.assertEqual(round(target * 10) % 2, 1)
+            self.assertGreater(target % .8, .09)
+
+    async def test_camera_timecode_proxy_has_only_av_and_normalized_clock(self):
+        source = self.root / "camera-timecode.mp4"
+        workflow.run_local([workflow.native("ffmpeg"), "-v", "error", "-y",
+            "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=48000/1001:d=2",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+            "-c:v", "libx264", "-c:a", "aac", "-timecode", "11:33:58:24", str(source)])
+        self.assertTrue(any(s.get("codec_tag_string") == "tmcd"
+                            for s in workflow.probe(source)["streams"]))
+        before = workflow.fingerprint(source)
+        with patch.object(workflow, "VolcAPI", side_effect=AssertionError("No cloud calls")):
+            prepared = workflow.prepare([str(source)], asr_backend_name="doubao_turbo")
+        _, job = workflow.load(prepared["job_id"])
+        clip = job["clips"][0]
+        info = workflow.probe(Path(clip["video_path"]))
+        self.assertEqual([s["codec_type"] for s in info["streams"]], ["video", "audio"])
+        self.assertEqual(info["streams"][0]["avg_frame_rate"], "30/1")
+        self.assertNotIn("timecode", info["streams"][0].get("tags", {}))
+        self.assertAlmostEqual(float(info["streams"][1]["duration"]), workflow.av_proxy_duration(clip["duration"]), delta=.05)
+        self.assertGreaterEqual(clip["proxy_padding_seconds"], .099)
+        self.assertLess(clip["proxy_padding_seconds"], .301)
+        self.assertEqual(workflow.fingerprint(source), before)
 
     async def test_no_network_without_job_approval(self):
         source = self.fixture(audio=False)

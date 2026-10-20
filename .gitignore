@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+.venv/
+.env
+!.env.example
+auth.json
+connection.json
+*.local.json
+social-video-download/runtime/python-packages/
+social-video-download/runtime/ffmpeg/

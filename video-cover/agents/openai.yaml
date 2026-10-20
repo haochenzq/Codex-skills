@@ -1,0 +1,4 @@
+interface:
+  display_name: "视频封面"
+  short_description: "区分口播与其他封面，按项目确认或沿用设计，再分画幅制作与验收"
+  default_prompt: "使用 $video-cover 制作封面：读取当前项目规则，选择口播或其他分支，按规则确认或沿用设计，再制作各画幅并验收交付。"

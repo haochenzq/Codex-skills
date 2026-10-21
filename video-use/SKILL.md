@@ -1,23 +1,23 @@
 ---
 name: video-use
-description: 视频制作项目专属：切点与操作已明确的剪切、字幕、调色或叠加等单项编辑自动使用；口播语义删留交talking-head-editing，整片创作或复杂合成交toolchain-video-production。helpers、运行器及manim-video可跨项目复用。
+description: 视频制作与LibTV制作共用：切点与操作已明确的剪切、字幕、调色、混音或叠加等单项编辑自动使用；按任务所属项目读取要求。helpers、运行器及manim-video保持通用。
 ---
 
 # 本地视频剪辑工具
 
-本技能的项目专属范围只限定工作流指令。`helpers/`、共享运行器及 `skills/manim-video/` 保持原位置与跨项目通用适用范围；其他既有调用直接使用所需模块或Manim入口，不因此加载本项目要求。不重复整套制作访谈、选段、动画分工和审批流程。
+本技能的双项目共用范围只限定工作流指令。`helpers/`、共享运行器及 `skills/manim-video/` 保持原位置与跨项目通用适用范围；其他既有调用直接使用所需模块或Manim入口，不因此加载本项目要求。不重复整套制作访谈、选段、动画分工和审批流程。
 
 
 ## 项目范围与规则
 
-本技能服务 `D:/Codex项目文件夹/视频制作`，按任务归属判断，不仅看当前工作目录。其他项目仅在明确承接本项目任务时沿用，不自动套用本项目要求。源码与全局安装位置不变。
+本技能服务 `D:/Codex项目文件夹/视频制作` 与 `D:/Codex项目文件夹/LibTV制作`，按任务归属判断，不仅看当前工作目录。其他项目仅在明确承接其中一个制作项目的任务时沿用其要求；两项目不互相继承专属偏好。源码与全局安装位置不变。
 
-执行前通过[项目入口](D:/Codex项目文件夹/视频制作/AGENTS.md)读取当前操作对应的规则，已读且未变内容直接复用。操作前只读本次剪切、字幕、调色或叠加涉及的要求与参数，不展开整片创作方案。发布或交付配套时读发布规则，收尾读项目文件整理规则。项目文件维护要求与参数，技能只维护执行方法；共享运行说明提供技术入口与限制，不另设业务要求。
+执行前按任务所属读取[视频制作入口](D:/Codex项目文件夹/视频制作/AGENTS.md)或[LibTV制作入口](D:/Codex项目文件夹/LibTV制作/AGENTS.md)读取当前操作对应的规则，已读且未变内容直接复用。操作前只读本次剪切、字幕、调色或叠加涉及的要求与参数，不展开整片创作方案。发布或交付配套时读发布规则，收尾读项目文件整理规则。项目文件维护要求与参数，技能只维护执行方法；共享运行说明提供技术入口与限制，不另设业务要求。
 
 ## 路由与运行
 
-- 明确切点或单项编辑直接执行本技能，不要求用户点名；只有需要判断原声音画口播的删留、口误、重录、重复及停顿时，使用 [talking-head-editing](C:/Users/lenovo/.codex/skills/talking-head-editing/SKILL.md) 的选段与必要检查流程，再复用本技能合成。
-- 整片创作、动画或需统筹多类素材与效果的复杂合成：使用 [toolchain-video-production](C:/Users/lenovo/.codex/skills/toolchain-video-production/SKILL.md) 组织制作；简单且已明确的单项编辑直接执行。
+- 明确切点或单项编辑直接执行本技能，不要求用户点名；仅视频制作的口播任务需要判断原声音画口播的删留、口误、重录、重复及停顿时，使用 [talking-head-editing](C:/Users/lenovo/.codex/skills/talking-head-editing/SKILL.md) 的选段与必要检查流程，再复用本技能合成。
+- 视频制作的本地整片创作、动画或复杂合成：使用 [toolchain-video-production](C:/Users/lenovo/.codex/skills/toolchain-video-production/SKILL.md) 组织制作；简单且已明确的单项编辑直接执行。LibTV整片继续由libtv-drama-production统筹，不切换到排除Seedance的本地整片路线；对白取舍按已确认剧本，实质改写回编剧导演。
 - 仅分析或转写：使用 [volc-video-analysis](C:/Users/lenovo/.codex/skills/volc-video-analysis/SKILL.md)。需要Manim时再读 [Manim入口](C:/Users/lenovo/.codex/skills/video-use/skills/manim-video/SKILL.md)。
 
 本机先按需读取 [统一运行入口](C:/Users/lenovo/.codex/runtimes/personal-video/RUNTIME.md)，使用其中 `video-toolchain/video-tools.ps1` 的 `video-use`、`timeline` 或 `manim` 命令。首次使用、依赖变化或报错时检查 `doctor`；同一任务复用正常环境。该入口适配Windows中文路径、静音源、PCM中间音轨、透明叠加与横竖画布；不在作品中重复安装依赖。

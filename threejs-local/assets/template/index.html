@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Three.js · 本地场景实验室</title>
+  </head>
+  <body>
+    <main>
+      <header><span class="eyebrow">LOCAL / THREE.JS</span><h1>场景实验室<span>01</span></h1><p>光影、运动与交互，从这里开始。</p></header>
+      <div id="stage"><canvas aria-label="交互式三维场景"></canvas><span class="stage-label">实时渲染 / WEBGL 2</span></div>
+      <aside>
+        <div class="toolbar"><button id="motion" aria-pressed="true">暂停动画</button><button id="orbit" aria-pressed="true">停止环绕</button><button id="reset">重置视角</button></div>
+        <p class="hint">拖动旋转 · 滚轮缩放 · 点击物体变色</p>
+        <p id="selection" role="status">尚未选择物体</p>
+        <details><summary>运行诊断</summary><output id="diagnostics">正在初始化…</output></details>
+        <p id="error" role="alert" hidden></p>
+      </aside>
+      <footer><span>原生 JavaScript · 本地运行</span><span id="revision">场景版本 02</span></footer>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

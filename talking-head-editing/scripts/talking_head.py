@@ -97,10 +97,11 @@ def load_session(edit, verify_sources=True):
 def backend():
     if not (RUNTIME/'api/workflow.py').is_file():
         raise ValueError('Shared personal-video runtime is unavailable; locate its maintenance entry')
-    site.addsitedir(str(RUNTIME/'python-packages'))
+    site.addsitedir(str(Path.home()/'AppData/Local/Programs/VideoTools/.venv/Lib/site-packages'))
     sys.path.insert(0, str(RUNTIME/'api'))
-    os.environ.setdefault('VOLC_FFMPEG', str(RUNTIME/'native/ffmpeg/ffmpeg.exe'))
-    os.environ.setdefault('VOLC_FFPROBE', str(RUNTIME/'native/ffmpeg/ffprobe.exe'))
+    media = Path.home()/'AppData/Local/Programs/FFmpeg/bin'
+    os.environ.setdefault('VOLC_FFMPEG', str(media/'ffmpeg.exe'))
+    os.environ.setdefault('VOLC_FFPROBE', str(media/'ffprobe.exe'))
     configuration = RUNTIME/'runtime-config.json'
     if configuration.is_file() and read_json(configuration).get('legacy_outputs'):
         os.environ.setdefault('VOLC_LEGACY_OUTPUTS', read_json(configuration)['legacy_outputs'])
@@ -297,6 +298,8 @@ def normalize(segments, asset, provider='doubao2'):
 
 def sync(edit):
     state = load_session(edit)
+    if state.get('workflow_finalized'):
+        return status(edit)
     if state['mode'] == 'cuts_only':
         return {'state': 'local_ready', 'job_id': None, 'cloud_calls': 0}
     workflow = backend()
@@ -309,7 +312,9 @@ def sync(edit):
     for asset in state['assets']:
         raw = folder/asset['id']/'transcript.json'
         transcript = normalize(read_json(raw), asset, job['asr_backend'])
-        transcript['raw_transcript_path'] = str(raw)
+        local_raw = f"transcripts/{asset['id']}.raw.json"
+        owned(edit, state, local_raw, raw.read_bytes())
+        transcript['raw_transcript_path'] = str(edit/local_raw)
         transcript['raw_transcript_sha256'] = sha(raw)
         path = f"transcripts/{asset['id']}.json"
         owned(edit, state, path, json_bytes(transcript))
@@ -357,16 +362,35 @@ def status(edit):
     report = {'state': state['state'], 'mode': state['mode'], 'job_id': state['job_id'],
               'sources': [{'id': a['id'], 'source': a['source'], 'audio_streams': a['audio_streams']} for a in state['assets']],
               'audio_understanding': state.get('audio_understanding', {}), 'asr_feature_coverage': state.get('asr_feature_coverage', {})}
-    if state['job_id']:
+    if state['job_id'] and not state.get('workflow_finalized'):
         folder, job = backend().load(state['job_id'])
         report.update(cloud_state=job['state'], planned_paid_requests=job['planned_paid_requests'],
                       paid_requests_attempted=job.get('paid_requests_attempted', 0), job_folder=str(folder))
+    elif state.get('workflow_finalized'):
+        report['cloud_state'] = 'finalized'
     return report
+
+
+def finish(edit, delivered=False):
+    state = load_session(edit)
+    if not delivered:
+        raise ValueError('Finish only after delivering the reviewed output')
+    if state.get('workflow_finalized'):
+        return status(edit)
+    output = Path(state.get('last_output', ''))
+    if state['state'] != 'rendered' or not output.is_file() or sha(output) != state.get('last_output_sha256'):
+        raise ValueError('Keep the workflow until the rendered output is available and unchanged')
+    if state['job_id']:
+        backend().finalize(state['job_id'], delivered=True)
+    state['workflow_finalized'] = True
+    state['job_folder'] = None
+    save_session(edit, state)
+    return status(edit)
 
 
 def advance(edit, allow_paid_calls=False):
     state = load_session(edit)
-    if not state['job_id'] or state.get('reuse_failed'):
+    if not state['job_id'] or state.get('reuse_failed') or state.get('workflow_finalized'):
         raise ValueError('No eligible cloud job; review this session instead of submitting another task')
     workflow = backend()
     report = asyncio.run(workflow.advance(state['job_id'], allow_paid_calls=allow_paid_calls))
@@ -650,11 +674,13 @@ def main(argv=None):
     p.add_argument('--fps')
     p.add_argument('--caption-style', required=True)
     p.add_argument('--draft', action='store_true')
-    for name in ('status', 'sync', 'advance', 'import-job', 'plan', 'render'):
+    for name in ('status', 'sync', 'advance', 'import-job', 'plan', 'render', 'finish'):
         p = commands.add_parser(name)
         p.add_argument('edit_dir', type=Path)
         if name == 'advance':
             p.add_argument('--allow-paid-calls', action='store_true')
+        if name == 'finish':
+            p.add_argument('--delivered', action='store_true')
         if name == 'import-job':
             p.add_argument('job_id')
         if name == 'plan':
@@ -673,6 +699,7 @@ def main(argv=None):
     elif args.command == 'advance': result = advance(edit,args.allow_paid_calls)
     elif args.command == 'import-job': result = import_job(edit,args.job_id)
     elif args.command == 'plan': result = build_plan(edit,args.plan_json)
+    elif args.command == 'finish': result = finish(edit,args.delivered)
     else: result = render(edit,args.output.absolute(),args.preview)
     print(json.dumps(result, ensure_ascii=False))
     return result

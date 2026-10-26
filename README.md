@@ -1,42 +1,34 @@
 # Codex skills
 
-个人 Codex 技能集合。仓库地址：[haochenzq/Codex-skills](https://github.com/haochenzq/Codex-skills)。
-
-本次同步日期：2026-10-21。由原 `haochenzq/test` 仓库更名，沿用原有 Git 提交历史。收录 9 个顶层个人技能及 1 个内嵌 Manim 技能，不包含 Codex 系统技能或第三方插件技能。
+个人 Codex 技能集合，收录当前使用的 7 个个人技能。同步日期：2026-10-26。
 
 ## 技能导航
 
 | 技能 | 用途 |
 | --- | --- |
-| [libtv-drama-production](libtv-drama-production/SKILL.md) | LibTV 短片制作、修改、恢复及角色资产 |
-| [seedance-video-production](seedance-video-production/SKILL.md) | Seedance 直连生成与原片交付 |
+| [blender-local](blender-local/SKILL.md) | 本地 Blender 建模、材质、灯光、动画及 GLB 导出 |
+| [threejs-local](threejs-local/SKILL.md) | 本地 Three.js 实时 3D 开发、预览和交互验证 |
 | [social-video-download](social-video-download/SKILL.md) | 抖音分享视频下载 |
-| [talking-head-editing](talking-head-editing/SKILL.md) | 口播语义分析、删留与剪辑 |
-| [toolchain-video-production](toolchain-video-production/SKILL.md) | 本地整片创作、动画及复杂合成 |
-| [video-cover](video-cover/SKILL.md) | 视频及合集封面设计 |
-| [video-use](video-use/SKILL.md) | 明确切点的剪切、字幕、调色及叠加 |
-| [manim-video](video-use/skills/manim-video/SKILL.md) | 数学、公式、算法与技术概念动画 |
-| [volc-video-analysis](volc-video-analysis/SKILL.md) | 现有视频分析与音频转写 |
-| [workspace-maintenance](workspace-maintenance/SKILL.md) | 项目规则、技能规范与资料维护 |
+| [talking-head-editing](talking-head-editing/SKILL.md) | 口播语义选段、字幕、剪辑与交付 |
+| [video-use](video-use/SKILL.md) | 明确操作的剪切、字幕、调色、混音和叠加 |
+| [volc-video-analysis](volc-video-analysis/SKILL.md) | 视频分析、音频转写、比较及任务恢复 |
+| [volc-video-generation](volc-video-generation/SKILL.md) | 火山 Seedance 视频生成、原任务查询和下载 |
 
-各技能的适用范围、参考文档及执行约束以对应 `SKILL.md` 和其链接为准。保留上游说明和许可证；`video-use` 中的上游安装说明不覆盖个人技能当前运行入口。
+适用范围、依赖、执行流程及授权要求以各技能的 `SKILL.md` 为准。系统技能和第三方插件技能由各自发布方维护，不收录在本仓库。
 
-## 源码与同步
+## 源码与使用
 
-个人维护源码位于本机 `D:/Codex项目文件夹/构建相关/技能与插件/`，分别归属 LibTV漫剧工作流、火山API接入、视频下载技能、视频封面、资料维护技能及个人技能运行环境。全局安装副本位于 `C:/Users/lenovo/.codex/skills/`。
+维护源码位于本机构建项目的各模块 `skill-package/<技能名>/`，全局安装在 `C:/Users/lenovo/.codex/skills/`。本次以维护源码覆盖仓库中的对应技能目录，28 个技能文件已核对与全局安装副本一致，7 个技能格式校验通过。
 
-本次已逐文件核对个人维护源码与安装副本一致；`video-use` 的 helpers、参考资料及内嵌 Manim 的上游配套从现用安装包补齐。仓库保存技能正文、脚本、参考资料、必要静态资源和已有配套测试。
+仓库保留本机运行路径；克隆或复制技能不等于完成部署。在其他电脑使用前，需要按技能说明配置解释器、FFmpeg、Blender、Node、MCP 连接及相应共享运行环境。Three.js 模板自带依赖清单和锁文件；视频技能使用说明中指定的宿主运行入口。
 
-## 使用前提
+不上传账号凭据、Cookie、用户媒体、真实任务回执、缓存、虚拟环境或第三方依赖目录。保留随技能提供的许可证。
 
-这是个人技能源码集合，保留本机路径及项目范围约束。复制到其他电脑后，需要配置相应项目路径、解释器、服务连接及运行环境；仅克隆仓库不等于完成部署。
+## 历史配套
 
-- 下载技能依赖见[下载说明](social-video-download/README.md)和[依赖清单](social-video-download/runtime/manifest.json)。
-- 视频技能所需的共享运行环境见各技能的 runtime 参考；仓库既有的[运行代码](video-runtime/README.md)仅包含局部源码，不是完整运行环境。
-- 不上传账号凭据、Cookie、真实任务回执、用户媒体、缓存，以及 FFmpeg、浏览器、Python/Node 等第三方依赖目录。
+- [video-runtime](video-runtime/README.md) 是此前保留的局部运行源码，未随本次技能同步更新，不代表当前宿主部署或完整运行环境。
+- [chat-with-codex 归档](archives/chat-with-codex/README.md) 是已卸载实验方案的历史资料，不是当前技能。
 
-本次同步核验包括 10 个技能入口格式校验和源文件内容一致性核对；未重新运行付费生成、下载或云端分析任务。
+本次已从当前分支移除停用的 `libtv-drama-production`、`seedance-video-production`、`toolchain-video-production`、`video-cover`、`workspace-maintenance`，以及旧 `video-use` 内嵌的 `manim-video` 技能和过时配套；旧版本可通过 Git 提交历史恢复。
 
-## 停用方案归档
-
-- [chat with Codex：只读本地项目文件接口](archives/chat-with-codex/README.md)：已卸载的实验方案、源码及详细排障记录，不属于可直接安装的技能。
+本次验证仅涉及技能格式、Python 语法、文件一致性及上传内容检查，未调用收费接口或重新执行媒体制作任务。

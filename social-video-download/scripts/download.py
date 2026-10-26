@@ -20,11 +20,11 @@ import urllib.parse
 import urllib.request
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
-VENDOR = SKILL_ROOT / 'runtime/python-packages'
+VENDOR = Path.home() / 'AppData/Local/Programs/VideoTools/.venv/Lib/site-packages'
 if VENDOR.is_dir():
     sys.path.insert(0, str(VENDOR))
 DEFAULT_OUTPUT = Path.cwd()
-FFMPEG = SKILL_ROOT / 'runtime/ffmpeg/ffmpeg.exe'
+FFMPEG = Path.home() / 'AppData/Local/Programs/FFmpeg/bin/ffmpeg.exe'
 FFPROBE = FFMPEG.with_name('ffprobe.exe')
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
 URL_RE = re.compile(r'https?://[^\s<>\"\u3000]+', re.I)
@@ -116,7 +116,7 @@ def safe_name(value):
 
 def probe(path, executable=FFPROBE, expected_duration=None, require_audio=False):
     if not Path(executable).is_file():
-        raise DownloadError('missing_ffprobe', 'ffprobe 不存在；请检查技能 runtime/ffmpeg 或指定 --ffprobe。')
+        raise DownloadError('missing_ffprobe', 'ffprobe 不存在；请检查宿主公共 FFmpeg 的 C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/ffprobe.exe 或指定 --ffprobe。')
     proc = subprocess.run([str(executable), '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(path)],
                           capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60)
     if proc.returncode:
@@ -160,7 +160,7 @@ def douyin_download(url, stage, cookie_file=None, ffmpeg=FFMPEG, reuse=None):
     try:
         import yt_dlp
     except ImportError:
-        raise DownloadError('missing_dependency', 'yt-dlp 依赖缺失，请检查技能 runtime/python-packages。')
+        raise DownloadError('missing_dependency', 'yt-dlp 依赖缺失，请修复宿主 VideoTools 独立环境。')
     options = {'outtmpl': str(stage / 'video.%(ext)s'), 'format': 'best[ext=mp4]/best',
                'noplaylist': True, 'quiet': True, 'no_warnings': True, 'logger': QuietLogger(),
                'socket_timeout': 30, 'retries': 2, 'extractor_retries': 1,
@@ -351,10 +351,10 @@ def main(argv=None):
         try:
             import yt_dlp.version
             import yt_dlp
-            checks['yt_dlp_bundled'] = Path(yt_dlp.__file__).resolve().is_relative_to(VENDOR.resolve())
+            checks['yt_dlp_host_installed'] = Path(yt_dlp.__file__).resolve().is_relative_to(VENDOR.resolve())
             details.update(yt_dlp=yt_dlp.version.__version__, yt_dlp_path=yt_dlp.__file__)
         except ImportError:
-            checks['yt_dlp_bundled'] = False
+            checks['yt_dlp_host_installed'] = False
         for name, executable in (('ffprobe', args.ffprobe), ('ffmpeg', args.ffprobe.with_name('ffmpeg.exe'))):
             details[name + '_path'] = str(executable)
             checks[name + '_exists'] = executable.is_file()

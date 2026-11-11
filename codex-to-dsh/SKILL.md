@@ -5,14 +5,14 @@ description: 通过本机后台在指定 DeepSeek Harness 会话中双向发消�
 
 # Codex-to-DSH
 
-使用 Windows 上已启用的 DSH Desktop「Codex 会话协作」插件和 Node.js。客户端为 `%LOCALAPPDATA%\DSH Codex Bridge\packages\0.6.5\client.js`。保持 DSH 桌面端运行，所有交互经本机后台连接，避免使用桌面或浏览器控制。每次由用户选择既有目标会话。
+使用 Windows 上已启用的 DSH Desktop「Codex 会话协作」插件和 Node.js。客户端为 `%LOCALAPPDATA%\DSH Codex Bridge\packages\0.6.6\client.js`。保持 DSH 桌面端运行，所有交互经本机后台连接，避免使用桌面或浏览器控制。每次由用户选择既有目标会话。
 
 ## 选择会话和接话
 
 用 `list "准确标题"` 查找并复核工作目录。已有明确 `session-…` ID 时直接使用。标题同名且无法从工作区或上下文确定时才询问。读写始终使用同一个 ID，不根据当前窗口或列表顺序推断。
 
 ```powershell
-$bridge = Join-Path $env:LOCALAPPDATA 'DSH Codex Bridge\packages\0.6.5\client.js'
+$bridge = Join-Path $env:LOCALAPPDATA 'DSH Codex Bridge\packages\0.6.6\client.js'
 node $bridge list 'Codex 与 DeepSeek 协作'
 node $bridge history $sessionId 30
 node $bridge message $sessionId $seq $offset

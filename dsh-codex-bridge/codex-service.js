@@ -100,7 +100,7 @@ export async function connectCodexService(cli, run) {
           ws.send(payload)
         })
       }
-      await rpc('initialize', { clientInfo: { name: 'dsh-codex-bridge', version: '0.6.5' },
+      await rpc('initialize', { clientInfo: { name: 'dsh-codex-bridge', version: '0.6.6' },
         capabilities: { experimentalApi: true } })
       ws.send(JSON.stringify({ method: 'initialized', params: {} }))
       return run(rpc)

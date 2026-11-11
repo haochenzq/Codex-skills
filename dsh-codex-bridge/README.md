@@ -28,7 +28,7 @@ Windows 上的本机桥接。两边每次选择一个已有会话。消息出现
 ~~~powershell
 $source = (Resolve-Path -LiteralPath '.\dsh-codex-bridge').Path
 $packages = Join-Path $env:LOCALAPPDATA 'DSH Codex Bridge\packages'
-$package = Join-Path $packages '0.6.5'
+$package = Join-Path $packages '0.6.6'
 if (Test-Path -LiteralPath $package) { throw "目标版本目录已存在，请先核对其来源。" }
 New-Item -ItemType Directory -Path $packages -Force | Out-Null
 Copy-Item -LiteralPath $source -Destination $package -Recurse
@@ -40,4 +40,4 @@ $dsh = Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness\resources\runtime\
 
 ## 验证
 
-在此目录运行 `node --test` 可执行自动测试。0.6.5 已验证桌面端持有会话时的纯文字往返，接收方活跃时消息进入当前轮次。
+在此目录运行 `node --test` 可执行自动测试。0.6.6 在 Codex 桌面会话活跃时直接向当前轮次发送。只有桌面端明确提示原轮已结束时，才开启新轮。已验证纯文字回传只到达一次、原轮结束后可继续发送，以及活跃轮次接收原生图片。

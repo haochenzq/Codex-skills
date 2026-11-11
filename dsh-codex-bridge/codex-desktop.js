@@ -5,6 +5,31 @@ import { bridgeError } from './protocol.js'
 const pipe = '\\\\.\\pipe\\codex-ipc'
 const maxFrameBytes = 32 * 1024 * 1024
 
+export async function deliverToDesktopOwner(request, ownerId, call, failure) {
+  const { threadId: conversationId, clientUserMessageId, input } = request
+  const text = input.filter(part => part.type === 'text').map(part => part.text).join('\n')
+  // Match the desktop composer's send-now route. Starting an active turn can leave a provisional turn in the UI.
+  const steer = await call('thread-follower-steer-turn', 1, {
+    conversationId, clientUserMessageId, input, attachments: [],
+    restoreMessage: { id: clientUserMessageId, text, createdAt: Date.now(), context: {
+      prompt: text, addedFiles: [], fileAttachments: [], ideContext: null, imageAttachments: [], workspaceRoots: [],
+    } },
+  }, ownerId, 35_000)
+  if (steer.resultType === 'success' && steer.handledByClientId === ownerId && steer.result?.result?.turnId) {
+    return { turn: { id: steer.result.result.turnId } }
+  }
+  // This exact native error is a rejection before delivery. Timeouts and missing receipts can already have applied.
+  if (steer.resultType !== 'error' || steer.error !== `Cannot steer conversation ${conversationId} because its active turn already ended`) {
+    throw failure()
+  }
+  const start = await call('thread-follower-start-turn', 2, {
+    conversationId,
+    turnStart: { request, context: { inheritThreadSettings: true } },
+  }, ownerId)
+  if (start.resultType !== 'success' || start.handledByClientId !== ownerId) throw failure()
+  return start.result?.result ?? {}
+}
+
 // Use the same owner discovery and follower delivery protocol as Codex desktop.
 export async function sendThroughDesktop(request) {
   const socket = createConnection(pipe)
@@ -68,12 +93,7 @@ export async function sendThroughDesktop(request) {
     if (owner.resultType !== 'success' || !owner.handledByClientId || !owner.result?.supportsUntrustedAppInput) throw failure()
 
     submitted = true
-    const response = await call('thread-follower-start-turn', 2, {
-      conversationId: request.threadId,
-      turnStart: { request, context: { inheritThreadSettings: true } },
-    }, owner.handledByClientId)
-    if (response.resultType !== 'success' || response.handledByClientId !== owner.handledByClientId) throw failure()
-    return response.result?.result ?? {}
+    return await deliverToDesktopOwner(request, owner.handledByClientId, call, failure)
   } finally {
     socket.destroy()
   }

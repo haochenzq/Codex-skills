@@ -19,7 +19,7 @@
 
 ## DSH 会话协作桥
 
-[DSH Codex Bridge 0.6.5](dsh-codex-bridge/README.md) 提供插件源码、安装方法和自动测试。
+[DSH Codex Bridge 0.6.6](dsh-codex-bridge/README.md) 提供插件源码、安装方法和自动测试。
 
 适用范围、依赖、执行流程及授权要求以各技能的 `SKILL.md` 为准。系统技能和第三方插件技能由各自发布方维护，不收录在本仓库。
 

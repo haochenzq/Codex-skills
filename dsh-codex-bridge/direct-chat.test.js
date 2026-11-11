@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { createDirectChat, sendCodexMessage } from './direct-chat.js'
+import { deliverToDesktopOwner } from './codex-desktop.js'
 import { withCodexService } from './codex-service.js'
 import { bridgeError } from './protocol.js'
 import { dispatch } from './index.js'
@@ -37,6 +38,50 @@ test('a desktop-owned thread never goes through the managed service', async () =
   await assert.rejects(sendCodexMessage(target, 'Unknown delivery', undefined, () => assert.fail(), async () => {
     throw bridgeError('codex-delivery-unknown', 'Desktop receipt missing')
   }), { code: 'codex-delivery-unknown' })
+})
+
+test('desktop delivery steers an active turn without starting a provisional turn', async () => {
+  const request = { threadId: randomUUID(), clientUserMessageId: randomUUID(),
+    input: [{ type: 'text', text: '【DSH】Follow-up', text_elements: [] }] }
+  const turnId = randomUUID()
+  let calls = 0
+  const result = await deliverToDesktopOwner(request, 'owner', async (method, version, params, target) => {
+    calls++
+    assert.equal(method, 'thread-follower-steer-turn')
+    assert.equal(version, 1)
+    assert.equal(target, 'owner')
+    assert.equal(params.conversationId, request.threadId)
+    assert.equal(params.clientUserMessageId, request.clientUserMessageId)
+    assert.equal(params.restoreMessage.id, request.clientUserMessageId)
+    assert.equal(params.input, request.input)
+    return { resultType: 'success', handledByClientId: 'owner', result: { result: { turnId } } }
+  }, () => assert.fail('unexpected delivery failure'))
+  assert.deepEqual(result, { turn: { id: turnId } })
+  assert.equal(calls, 1)
+})
+
+test('desktop delivery opens a turn only after a definite inactive-turn rejection', async () => {
+  const request = { threadId: randomUUID(), clientUserMessageId: randomUUID(), input: [] }
+  const turn = { id: randomUUID() }
+  const calls = []
+  const failure = () => bridgeError('codex-delivery-unknown', 'Delivery could not be confirmed')
+  const result = await deliverToDesktopOwner(request, 'owner', async (method, version, params, target) => {
+    calls.push(method)
+    if (method === 'thread-follower-steer-turn') return { resultType: 'error',
+      error: `Cannot steer conversation ${request.threadId} because its active turn already ended` }
+    assert.equal(target, 'owner')
+    assert.equal(params.turnStart.request, request)
+    return { resultType: 'success', handledByClientId: 'owner', result: { result: { turn } } }
+  }, failure)
+  assert.deepEqual(result, { turn })
+  assert.deepEqual(calls, ['thread-follower-steer-turn', 'thread-follower-start-turn'])
+
+  for (const response of [{ resultType: 'error', error: 'timeout' }, { resultType: 'success', handledByClientId: 'owner' }]) {
+    await assert.rejects(deliverToDesktopOwner(request, 'owner', async method => {
+      assert.equal(method, 'thread-follower-steer-turn')
+      return response
+    }, failure), { code: 'codex-delivery-unknown' })
+  }
 })
 
 test('a writer conflict before submission rechecks ownership without submitting to the managed service', async () => {

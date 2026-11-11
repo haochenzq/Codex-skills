@@ -94,6 +94,14 @@ def load_session(edit, verify_sources=True):
     return state
 
 
+def load_local_tools():
+    entry = RUNTIME/'video-toolchain/local_tools.py'
+    spec = importlib.util.spec_from_file_location('talking_head_local_tools', entry)
+    local = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(local)
+    return local
+
+
 def backend():
     if not (RUNTIME/'api/workflow.py').is_file():
         raise ValueError('Shared personal-video runtime is unavailable; locate its maintenance entry')
@@ -120,13 +128,16 @@ def asset_record(asset):
             raise ValueError()
     except (ValueError, ZeroDivisionError):
         fps = 30.0
+    default_canvas = load_local_tools().default_canvas(
+        dict(video, width=video.get('width', 1920), height=video.get('height', 1080)))
     width, height = video.get('width', 1920), video.get('height', 1080)
     rotation = next((s.get('rotation', 0) for s in video.get('side_data_list', []) if 'rotation' in s), 0)
     if abs(float(rotation)) % 180 == 90:
         width, height = height, width
     return {'id': asset['id'], 'source': str(Path(asset['source']).resolve()),
             'sha256': asset['sha256'], 'duration': metadata['duration'],
-            'width': width, 'height': height, 'fps': fps, 'audio_streams': audio_count}
+            'width': width, 'height': height, 'default_canvas': list(default_canvas),
+            'fps': fps, 'audio_streams': audio_count}
 
 
 def new_state(job_id, folder, job):
@@ -455,7 +466,7 @@ def build_plan(edit, plan_path):
     plan = read_json(plan_path)
     if not isinstance(plan, dict) or not isinstance(plan.get('ranges'), list):
         raise ValueError('A plan must contain a ranges array')
-    if set(plan)-{'ranges', 'fps', 'caption_groups', 'word_corrections', 'subtitle_style', 'grade', 'overlays', 'max_caption_chars'}:
+    if set(plan)-{'ranges', 'fps', 'canvas', 'caption_groups', 'word_corrections', 'subtitle_style', 'grade', 'overlays', 'max_caption_chars'}:
         raise ValueError('Unknown plan field; do not silently ignore editing instructions')
     assets = {a['id']: a for a in state['assets']}
     fps = number(plan.get('fps', state['assets'][0]['fps']))
@@ -543,8 +554,14 @@ def build_plan(edit, plan_path):
         if start < 0 or duration <= 0 or start+duration > offsets+.001:
             raise ValueError('Overlay exceeds the output timeline')
     first = assets[ranges[0]['source']]
-    portrait = first['height'] > first['width']
-    width, height = (1080, 1920) if portrait else (1920, 1080)
+    local = load_local_tools()
+    requested = plan.get('canvas')
+    if requested is not None:
+        width, height = local.validate_canvas(requested)
+    elif first.get('default_canvas'):
+        width, height = local.validate_canvas(first['default_canvas'])
+    else:
+        width, height = local.source_canvas(first['source'])
     font_size = round(min(height*.045, width/22))
     style = plan.get('subtitle_style', f'FontName=Microsoft YaHei,FontSize={font_size},PrimaryColour=&H00FFFFFF,OutlineColour=&H00101419,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV={round(height*.06)}')
     if not isinstance(style, str) or not style.strip():
@@ -552,7 +569,7 @@ def build_plan(edit, plan_path):
     if not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9]*=[^'\r\n;\\\[\]]+", p) for p in style.split(',')):
         raise ValueError('Subtitle style must use ordinary ASS key=value fields')
     srt = '\n\n'.join(f'{i}\n{stamp(a)} --> {stamp(b)}\n{text}' for i, (a,b,text) in enumerate(captions,1))+'\n'
-    edl = {'version': 1, 'sources': {name: a['source'] for name,a in assets.items()},
+    edl = {'version': 1, 'canvas': [width, height], 'sources': {name: a['source'] for name,a in assets.items()},
            'ranges': ranges, 'grade': plan.get('grade'), 'overlays': plan.get('overlays', []),
            'total_duration_s': offsets}
     edl['overlays'] = [dict(o, file=str((edit/o['file']).resolve())) for o in edl['overlays']]
@@ -585,7 +602,11 @@ def render(edit, output, preview=False):
         if name in state['generated_files_sha256'] and sha(edit/name) != state['generated_files_sha256'][name]:
             raise ValueError('Plan or captions changed independently; regenerate from the reviewed plan')
     work.mkdir(parents=True)
-    atomic(work/'edl.json', edl_path.read_bytes())
+    edl = read_json(edl_path)
+    if edl.get('canvas') is None and state.get('output_canvas'):
+        # Previously planned projects record their original canvas in state.
+        edl['canvas'] = state['output_canvas']
+    atomic(work/'edl.json', json_bytes(edl))
     flags = ['--fps', str(state['output_fps']), '--caption-style', state['caption_style']]
     if preview:
         flags.append('--draft')
@@ -610,10 +631,7 @@ def render_worker(args):
     Runs in a separate process. Neither the upstream helpers nor shared adapter
     files are changed. The existing adapter accepts a subtitle path, not a style.
     """
-    entry = RUNTIME/'video-toolchain/local_tools.py'
-    spec = importlib.util.spec_from_file_location('talking_head_local_tools', entry)
-    local = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(local)
+    local = load_local_tools()
     original_load = local.load_video_use
 
     def load():

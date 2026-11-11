@@ -16,9 +16,9 @@ description: 执行明确切点或操作的剪切、字幕、调色、混音、�
 {"version":1,"sources":{"take1":"D:/素材.mp4"},"ranges":[{"source":"take1","start":2.4,"end":6.8}]}
 ```
 
-start/end为原片秒数，ranges顺序即成片顺序。可选：`subtitles`为成片时间SRT绝对路径；`overlays`如`[{"file":"D:/动画.webm","start_in_output":0,"duration":2}]`；`grade`为预设或FFmpeg滤镜。
+start/end为原片秒数，ranges顺序即成片顺序。可选：`canvas`为`[宽,高]`像素，例如`[3840,2160]`或`[1080,1080]`；`subtitles`为成片时间SRT绝对路径；`overlays`如`[{"file":"D:/动画.webm","start_in_output":0,"duration":2}]`；`grade`为预设或FFmpeg滤镜。
 
-未指定canvas沿首素材朝向；合成器仅1080p横/竖屏、预览720p，等比补边。其他规格或仅截取且其余不变时用FFmpeg，避免默认响度、淡化或分辨率改变输出。
+未指定canvas时默认短边1080像素并按首素材显示比例确定画布：常见横屏1920×1080、竖屏1080×1920，方形1080×1080。用户指定其他画幅或清晰度时写入实际`canvas`，宽高须为正偶数以兼容现有H.264/yuv420p导出；多段素材比例不一致且输出处理方式无法合理判断时先与用户对齐。`--draft`按画布比例缩至短边最多720像素，不放大小画布。素材等比缩放并补边；按目标画布制作全屏叠加，需特定位置或缩放的局部叠加可用FFmpeg。仅截取且要求其余规格不变时用FFmpeg，避免默认响度、淡化或分辨率改变输出；低清素材放大不等于新增细节。
 
 FFmpeg/ffprobe：`C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/`；Python：`C:/Users/lenovo/AppData/Local/Programs/VideoTools/.venv/Scripts/python.exe`；helpers在本技能目录。不借Codex内部依赖，只给子进程配置媒体路径；少用参数查`--help`。
 

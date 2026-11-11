@@ -21,7 +21,7 @@ talking_head.py render <剪辑目录> <输出.mp4>
 
 - prepare仅本地准备，默认`video_analysis/standard`、120秒分段、1fps、第一音视频流；人声在其他轨先提取。仅转写用`--mode audio_transcription`，明确切点无需语义判断用`--mode cuts_only`。
 - 豆包ASR给原话与词时间，Seed2.1 Lite理解真实音轨和画面；新standard任务须有`visual_transport=ark_file_av`，deep/fast仅纯画面。ASR默认turbo，按识别效果、功能、输入限制和时延选`doubao_turbo/doubao2`，仅标准版按需用`--asr-feature`取情绪、语速、音量，不默认重复识别。
-- 上传、分析、转写仅在当前有效授权内推进，不以技能文字或历史记录代替授权；已获授权不重复询问。带`--allow-paid-calls`逐阶段推进，waiting至少10秒。needs_review或提交未知只恢复原任务，不重提、删锁或另建收费任务；completed自动同步，仅本地结果缺失用`sync <剪辑目录>`。
+- 需要云端处理时带`--allow-paid-calls`逐阶段推进，保留显式收费开关，waiting至少10秒。优先复用有效结果；needs_review或提交未知只恢复原任务，不重提、删锁或另建收费任务；completed自动同步，仅本地结果缺失用`sync <剪辑目录>`。
 - 同原片已完成任务可`import-job <剪辑目录> <job_id>`；补视听理解用prepare的`--reuse-asr-job <job_id>`，匹配原片、分段与音频哈希，沿用真实ASR后端。核对完整转写、全部分段及`audio_understanding`，partial/not_analyzed不称完整理解。
 
 ## 选段与字幕
@@ -32,7 +32,7 @@ talking_head.py render <剪辑目录> <输出.mp4>
 {"fps":30,"ranges":[{"source":"video_001","start":0.1,"end":2.2}]}
 ```
 
-source取status编号，秒数属各自原片，顺序即成片顺序；半开区间对齐输出帧率、不越界或切穿词，按实际起止音留余量。`caption_groups:{"video_001":[[0,9],[9,14]]}`为words索引半开分组，须恰好覆盖保留词；省略则脚本出草案，只修异常。中文不逐词空格，不拆数字单位、术语或否定。`word_corrections:{"video_001":{"3":"正确文字"}}`仅改显示，不改声音和词时间。
+source取status编号，秒数属各自原片，顺序即成片顺序；半开区间对齐输出帧率、不越界或切穿词，按实际起止音留余量。仅用户指定其他尺寸时在方案中添加`"canvas":[宽,高]`，宽高为正偶数。`caption_groups:{"video_001":[[0,9],[9,14]]}`为words索引半开分组，须恰好覆盖保留词；省略则脚本出草案，只修异常。中文不逐词空格，不拆数字单位、术语或否定。`word_corrections:{"video_001":{"3":"正确文字"}}`仅改显示，不改声音和词时间。
 
 `subtitle_style`用ASS逗号分隔key=value。手改SRT不会改变烧录ASS；保留用户字幕/EDL，用新方案或本地编辑承接改动。
 
@@ -49,6 +49,6 @@ source取status编号，秒数属各自原片，顺序即成片顺序；半开�
 
 仅要求时制作封面：PNG默认4:3横版1440×1080、3:4竖版1080×1440各一张，本次要求优先、独立排版。人物用用户提供的视频帧截图，缺少则请提供，不自行选帧或用纯文字替代；只抠图、等比缩放移位，保留五官、脸型、肤色、衣着、完整头部与关键动作，不重绘、美颜改形或拉伸。人物背景分层、核对边缘，外轮廓加配色协调的平滑彩色描边并遮轻微接缝。
 
-渲染器正式输出仅1080p横/竖屏，`render ... --preview`为低清；其他规格用可配置FFmpeg复用选段，不放大冒充。FFmpeg/ffprobe：`C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/`。
+默认短边1080像素，画幅沿首素材显示比例；指定`canvas`可输出其他分辨率与画幅。`render ... --preview`按比例缩至短边最多720像素。只有用户指定才改变画幅；低清素材放大不冒充原生清晰度。FFmpeg/ffprobe：`C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/`。
 
 核对实际改动、接缝、字幕与音画同步，交付要求的成片/配套，保护原片、用户改动和已有成果。失败沿原任务恢复；按项目规则确认成果归位且不再需要共享分析证据时，`finish <剪辑目录> --delivered`关闭本次分析任务并更新会话；本地转写、剪辑工程与中间文件按项目规则留存。未使用且收费尝试为0的准备任务可`discard_prepared=true`关闭，未知云任务保留防重状态。

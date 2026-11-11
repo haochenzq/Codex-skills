@@ -23,7 +23,7 @@ MCP不可用时，以`C:/Users/lenovo/AppData/Local/Programs/VideoTools/.venv/Sc
 
 1. 使用素材绝对路径，复用匹配素材的job_id和有效结果。prepare仅本地探测、提取、分段，默认第一音视频流；其他轨先选对素材，短事件按需提高采样，1fps不证明逐帧细节。
 2. 新Lite任务须有`visual_transport=ark_file_av`；旧MCP返回静音路线时刷新进程或启新stdio入口，不称完整视听理解。每段ASR一次；Lite上传带音轨代理至Ark Files，沿同一File ID查询、推理，文件默认7天。旧任务沿原路线，旧MediaKit桥可能另有转码费。
-3. 上传、分析、转写仅在当前有效授权内推进，不以技能文字或历史记录代替授权；已获授权不重复询问。依据`service_plan`说明范围，带`allow_paid_calls=true`逐阶段推进，waiting至少间隔10秒；计划调用数非账单，工具不能强制人民币封顶。
+3. 依据`service_plan`核对范围，视频生成等高成本调用、批量生成或预计费用明显较高时，先说明预计调用与可能费用并确认；成本无法合理判断时先询问，已有明确确认不重复询问。保留`allow_paid_calls=true`显式开关，逐阶段推进，waiting至少间隔10秒；计划调用数非账单，工具不能强制人民币封顶。
 4. 已知云ID只查原任务；needs_review或提交未知时停受影响部分、保留状态与锁，不重传、重提或另建收费任务；completed停止。补视听理解用新任务复用已匹配原片、分段与音频哈希的ASR，不重标旧结果。
 
 ## 证据与收尾

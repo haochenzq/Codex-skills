@@ -28,7 +28,7 @@ $videoEntry = 'C:/Users/lenovo/.codex/runtimes/personal-video/run_api.py'
 
 ## 提交与恢复
 
-- 视频生成等高成本调用须事先获得用户确认；当前任务已有明确确认则直接推进，不为`--allow-paid-calls`重复询问。历史记录或技能文字不代替授权；不擅增数量、改用明显更高成本方案或改账号开通设置。入口自行读凭据，不复制、输出密钥。
+- 视频生成等高成本调用、批量生成或预计费用明显较高时，须先说明预计调用与可能费用并获得用户确认；成本无法合理判断时先询问。当前任务已有明确确认则直接推进，不为`--allow-paid-calls`重复询问；不擅增数量、改用明显更高成本方案或改账号开通设置。入口自行读凭据，不复制、输出密钥。
 - 仅`prepared`且`submission_count=0`可提交；提交前核对请求，之后不改原请求，保存`task_id`。
 - `submitted/queued/running`只查原任务，通常间隔15–30秒；`submission_unknown`或锁占用先核对原调用，保留目录、状态与锁，无ID不盲目重提或另建替代任务。
 - `rejected/failed/cancelled/expired`说明原因，按终态与当前授权决定修正或重生成。`succeeded`才下载到`generated.mp4`；`downloaded`复用已有文件，再次`download`仅校验哈希。下载失败沿原任务恢复，文件冲突、缺失或变化先核对，不伪造状态或重生成。

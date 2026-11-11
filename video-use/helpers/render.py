@@ -22,7 +22,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -245,6 +247,15 @@ def probe_source_fps(video: Path) -> str | None:
 # -------- Per-segment extraction (Rule 2 + Rule 3) --------------------------
 
 
+def canvas_tools():
+    codex = Path(os.environ.get('CODEX_HOME') or Path.home()/'.codex')
+    entry = codex/'runtimes/personal-video/video-toolchain/local_tools.py'
+    spec = importlib.util.spec_from_file_location('video_use_canvas_tools', entry)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def extract_segment(
     source: Path,
     seg_start: float,
@@ -254,24 +265,27 @@ def extract_segment(
     preview: bool = False,
     draft: bool = False,
     rate: str | None = None,
+    canvas: tuple[int, int] | None = None,
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
-    `-ss` before `-i` for fast accurate seeking. Scale to 1080p from 4K.
-    Portrait sources (height > width) are scaled by height to preserve orientation.
+    `-ss` before `-i` for fast accurate seeking. Default to the source display
+    ratio at 1080p; an explicit canvas selects other supported dimensions.
 
     Quality ladder:
-      - final (default): 1080p libx264 fast CRF 20
-      - preview:         1080p libx264 medium CRF 22 (evaluable for QC)
-      - draft:           720p libx264 ultrafast CRF 28 (cut-point check only)
+      - final (default): requested canvas, or source ratio at 1080p; fast CRF 20
+      - preview:         same canvas, medium CRF 22 (evaluable for QC)
+      - draft:           short side at most 720px, ultrafast CRF 28
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    portrait = is_portrait_source(source)
+    tools = canvas_tools()
+    canvas = canvas if canvas is not None else tools.source_canvas(source)
     if draft:
-        scale = "scale=-2:1280" if portrait else "scale=1280:-2"
-    else:
-        scale = "scale=-2:1920" if portrait else "scale=1920:-2"
+        canvas = tools.preview_canvas(canvas)
+    width, height = canvas
+    scale = (f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+             f"force_divisible_by=2:reset_sar=1,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1")
 
     vf_parts: list[str] = []
     if is_hdr_source(source):
@@ -337,6 +351,11 @@ def extract_all_segments(
 
     ranges = edl["ranges"]
     sources = edl["sources"]
+    if not ranges:
+        raise ValueError('At least one range is required')
+    tools = canvas_tools()
+    first_src = resolve_path(sources[ranges[0]["source"]], edit_dir)
+    canvas = tools.validate_canvas(edl['canvas']) if edl.get('canvas') is not None else tools.source_canvas(first_src)
 
     # Resolve ONE output frame rate for the entire render and apply it to every
     # segment. The lossless concat (Rule 2, `-c copy`) requires all segments to
@@ -373,7 +392,8 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft, rate=out_rate)
+        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview,
+                        draft=draft, rate=out_rate, canvas=canvas)
         seg_paths.append(out_path)
 
     return seg_paths
@@ -716,12 +736,12 @@ def main() -> None:
     ap.add_argument(
         "--preview",
         action="store_true",
-        help="Preview mode: 1080p, medium, CRF 22 — evaluable for QC, faster than final.",
+        help="Preview mode: requested canvas, medium, CRF 22 — evaluable for QC.",
     )
     ap.add_argument(
         "--draft",
         action="store_true",
-        help="Draft mode: 720p, ultrafast, CRF 28 — cut-point verification only.",
+        help="Draft mode: short side at most 720px, ultrafast, CRF 28 — cut-point verification only.",
     )
     ap.add_argument(
         "--build-subtitles",

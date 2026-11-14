@@ -1,0 +1,23 @@
+[Unit]
+Description=Private VPS subscription and ACME challenge
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=private-subscription
+Group=private-subscription
+ExecStart=/usr/bin/python3 /opt/personal-vps-subscription/subscription_server.py --config /var/lib/personal-vps-subscription/config.json
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ReadWritePaths=/var/lib/personal-vps-subscription
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

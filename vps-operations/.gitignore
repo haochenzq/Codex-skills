@@ -1,0 +1,12 @@
+*.private.*
+.env
+auth.json
+billing.json
+config.json
+private.yaml
+state.json
+token
+known_hosts
+*.pem
+*.key
+__pycache__/

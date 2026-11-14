@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll V.PS traffic usage
+
+[Timer]
+OnActiveSec=5min
+OnUnitInactiveSec=5min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+{
+  "listen": "0.0.0.0",
+  "https_port": 8443,
+  "acme_port": 80,
+  "interface": "eth0",
+  "webroot": "/var/lib/personal-vps-subscription/acme",
+  "certificate_file": "/var/lib/personal-vps-subscription/tls/fullchain.pem",
+  "key_file": "/var/lib/personal-vps-subscription/tls/privkey.pem",
+  "token_file": "/var/lib/personal-vps-subscription/token",
+  "yaml_file": "/var/lib/personal-vps-subscription/private.yaml",
+  "billing_file": "/var/lib/personal-vps-subscription/billing.json",
+  "state_file": "/var/lib/personal-vps-subscription/state.json",
+  "provider_usage_file": "/var/lib/personal-vps-api-usage/usage.json"
+}

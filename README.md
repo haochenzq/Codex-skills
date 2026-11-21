@@ -1,6 +1,6 @@
 # Codex skills
 
-个人 Codex 技能集合，收录当前使用的 10 个个人技能。同步日期为 2026-11-12。
+个人 Codex 技能集合，收录维护清单中的 10 个个人技能。同步日期为 2026-11-21。
 
 ## 技能导航
 
@@ -14,7 +14,7 @@
 | [volc-video-analysis](volc-video-analysis/SKILL.md) | 视频分析、音频转写、比较及任务恢复 |
 | [volc-video-generation](volc-video-generation/SKILL.md) | 火山 Seedance 视频生成、原任务查询和下载 |
 | [local-video-production](local-video-production/SKILL.md) | 本地视频制作及工具选择 |
-| [reusable-lessons](reusable-lessons/SKILL.md) | 从实际工作提炼、整理可复用经验 |
+| [video-directing-production](video-directing-production/SKILL.md) | 分集短剧导演与制作 |
 | [codex-to-dsh](codex-to-dsh/SKILL.md) | 在本机与 DeepSeek Harness 双向协作 |
 
 ## DSH 会话协作桥
@@ -29,7 +29,7 @@
 
 ## 源码与使用
 
-维护源码位于本机构建项目的各模块 `skill-package/<技能名>/`，全局安装在 `C:/Users/lenovo/.codex/skills/`。本次同步全局安装的现行版本，32 个技能文件与本机副本一致，10 个技能格式校验通过。
+维护源码位于本机构建项目的各模块 `skill-package/<技能名>/`，全局安装在 `C:/Users/lenovo/.codex/skills/`。本次同步维护源码；其中 video-directing-production 当前尚未安装，其余九项与全局安装副本一致。
 
 仓库保留本机运行路径；克隆或复制技能不等于完成部署。在其他电脑使用前，需要按技能说明配置解释器、FFmpeg、Blender、Node、MCP 连接及相应共享运行环境。Three.js 模板自带依赖清单和锁文件；视频技能使用说明中指定的宿主运行入口。
 
@@ -42,4 +42,4 @@
 
 此前已从当前分支移除停用的 `libtv-drama-production`、`seedance-video-production`、`toolchain-video-production`、`video-cover`、`workspace-maintenance`，以及旧 `video-use` 内嵌的 `manim-video` 技能和过时配套；旧版本可通过 Git 提交历史恢复。
 
-本次发布核对了技能格式、Python 语法和文件一致性，并运行桥接插件的自动测试。
+reusable-lessons 为此前保留的技能资料，不在当前个人技能维护清单中。

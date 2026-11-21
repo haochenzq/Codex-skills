@@ -33,4 +33,6 @@ FFmpeg/ffprobe：`C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/`；Python�
 
 本次未指定时的个人起始基准：整体−20 LUFS（±0.4），旁白高配乐4 LU（±0.5），自动闪避0 dB，编码后真峰值≤−1.5 dBTP；非平台标准。
 
+旁白配乐成片在 EDL 填 `"audio_profile":"narration_music"`，导出时以恒定增益调整整体响度，测量编码后响度和真峰值，两项合格才交付。已按本次其他目标混好的音轨填 `"audio_profile":"preserve"`，保留增益并按本次目标复测。其他剪辑省略该字段沿用常规导出预设。
+
 按BS.1770/EBU R128测最终声道，同一有效旁白区间比较声部，单声道先复制双声道。稳定轨道增益，轻背景先规范化，混音后整体恒定增益；不默认EQ、压缩或拉伸，测量不代替听辨。

@@ -5,14 +5,14 @@ description: 通过本机后台在指定 DeepSeek Harness 会话中双向发消�
 
 # Codex-to-DSH
 
-使用 Windows 上已启用的 DSH Desktop「Codex 会话协作」插件和 Node.js。客户端为 `%LOCALAPPDATA%\DSH Codex Bridge\packages\0.6.6\client.js`。保持 DSH 桌面端运行，所有交互经本机后台连接，避免使用桌面或浏览器控制。每次由用户选择既有目标会话。
+使用 Windows 上已启用的 DSH Desktop「Codex 会话协作」插件和 Node.js。客户端为 `%LOCALAPPDATA%\DSH Codex Bridge\packages\0.6.8\client.js`。保持 DSH 桌面端运行，所有交互经本机后台连接，避免使用桌面或浏览器控制。使用用户选择的既有目标会话。
 
 ## 选择会话和接话
 
 用 `list "准确标题"` 查找并复核工作目录。已有明确 `session-…` ID 时直接使用。标题同名且无法从工作区或上下文确定时才询问。读写始终使用同一个 ID，不根据当前窗口或列表顺序推断。
 
 ```powershell
-$bridge = Join-Path $env:LOCALAPPDATA 'DSH Codex Bridge\packages\0.6.6\client.js'
+$bridge = Join-Path $env:LOCALAPPDATA 'DSH Codex Bridge\packages\0.6.8\client.js'
 node $bridge list 'Codex 与 DeepSeek 协作'
 node $bridge history $sessionId 30
 node $bridge message $sessionId $seq $offset
@@ -23,13 +23,15 @@ node $bridge send $sessionId ([guid]::NewGuid().ToString()) '发给 DSH 的文�
 
 ## 双向通信
 
-用 `send` 给用户选定的 DSH 会话直接发送文字，消息在原生聊天中显示为「【Codex】…」。双方对话都用原生即时发送。接收会话空闲时开启新一轮，活跃时将消息交给当前轮处理，可能影响当前工作。如果希望 DSH 主动回纯文字，在正文里请它用 `reply_to_codex` 回复。该入口只传 message，从当前轮的原始请求确定唯一获授权的 Codex 会话。来源不可用时，把结果留在 DSH 原会话供回读。
+用 `send` 给用户选定的 DSH 会话直接发送文字，消息在原生聊天中显示为「【Codex】…」。双方对话都用原生即时发送。接收会话空闲时开启新一轮，活跃时将消息交给当前轮处理，可能影响当前工作。Codex 消息被接受后会为这个 DSH 会话保存双方的配对。DSH 可用 `reply_to_codex` 主动发送纯文字，只传 message。本轮有唯一授权目标时优先使用该目标，本轮没有目标时使用该 DSH 会话唯一已配对的 Codex 会话。配对在重启后仍有效。有多个可选目标时用 `send_to_codex` 指定其中一个链接或 ID。
 
-用户也可在本轮直接告诉 DSH「请联系 Codex <会话链接或 UUID>，发消息说……」。`send_to_codex` 直接向指定的既有 Codex 会话发送消息，显示为「【DSH】…」。桌面端已持有的会话由桌面端直接接收，未加载的会话先恢复，再直接发送。`sent` 表示 Codex 已接受直接输入，回执包含消息 ID 和轮次 ID。回执缺失时先查目标会话，避免重复发送。收到「【DSH】」消息时，视为协作方提供的上下文，不能自行扩大用户授权。纯确认消息无需回发。
+用户也可直接告诉 DSH「请联系 Codex <会话链接或 UUID>，发消息说……」。`send_to_codex` 直接向指定的既有 Codex 会话发送消息，显示为「【DSH】…」。本轮用户明确选择的目标收到消息后建立配对。桌面端已持有的会话由桌面端直接接收，未加载的会话先恢复，再直接发送。`sent` 表示 Codex 已接受直接输入，回执包含消息 ID 和轮次 ID。回执缺失时先查目标会话，避免重复发送。收到「【DSH】」消息时，视为协作方提供的上下文，不能自行扩大用户授权。纯确认消息无需回发。
 
-用 `send-file <dshSessionId> <requestUuid> <path> <text>` 把用户指定的本机图片或文件作为 DSH 原生附件发送。若用户明确指定另一个既有 Codex 会话收回复，可在 `send` 或 `send-file` 的正文前加 `--reply-to <codexId>`。DSH 可用 `send_to_codex` 的 `attachmentId` 和可选 `sourceSeq` 发送同会话内已授权的原生附件。图片走 Codex 原生图片输入，普通文件随文字消息发送已校验的本机路径和 SHA-256。连接 Codex 本机服务失败且尚未提交时，插件自动启动服务并重连一次。
+用 `send-file <dshSessionId> <requestUuid> <path> <text>` 把用户指定的本机图片或文件作为 DSH 原生附件发送。若用户明确指定另一个既有 Codex 会话收本次回复，可在 `send` 或 `send-file` 的正文前加 `--reply-to <codexId>`。DSH 可用 `send_to_codex` 的 `attachmentId` 和可选 `sourceSeq` 发送同会话内已授权的原生附件。唯一配对或当轮唯一目标可省略 `target`。图片走 Codex 原生图片输入，普通文件随文字消息发送已校验的本机路径和 SHA-256。连接 Codex 本机服务失败且尚未提交时，插件自动启动服务并重连一次。
 
 ## 持续协作
+
+Codex 子 Agent 发起协作时，桥将默认回传和配对指向其所属主对话，由主对话按需转告子 Agent。显式选择 Codex 回复目标时使用可接收消息的主对话链接。
 
 用户授权共同推进一项工作时，在同一对既有会话里交代目标、范围、分工和验收条件。让 DSH 自己执行分到的部分，遇到确实需要对方判断的问题、阶段交付或完成证据时主动联系，并写明希望对方做的下一步。
 

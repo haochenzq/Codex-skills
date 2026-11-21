@@ -11,7 +11,7 @@ description: 按视频需求自主组合本地剪辑、二维或三维动画与�
 
 ## 按需选择
 
-- 剪辑、拼接、字幕、调色、混音和封装：复用`video-use`入口或直接用FFmpeg；需要精确切点、保留原规格等按实际选择。FFmpeg/ffprobe在`C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/`。
+- 剪辑、拼接、字幕、调色、混音和封装见 [video-use 的入口与 EDL](../video-use/SKILL.md#入口与edl)。FFmpeg/ffprobe位于`C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/`。
 - 二维动画：Remotion及HTML/CSS/Canvas；SVG用于矢量图、图表和图形动画；Python、Pillow、NumPy可制作或处理图片及序列。选择适合的方式，不强制混用。
 - 三维：Blender制作场景、模型与动画；Three.js制作实时场景，可结合Remotion的ThreeCanvas渲染。作品场景及动画使用任务指定的画布，默认按素材比例和1080p设置；Blender后台入口可用`--width <宽> --height <高>`临时指定输出尺寸，不改源`.blend`。交互操作使用当前会话MCP并核对连接，仅在需要时启动。
 - 图片：需要AI图片时用当前会话可用的ImageGen生成或编辑，作为素材保存到本次项目；它是云端能力并受账户额度约束。
@@ -21,14 +21,6 @@ description: 按视频需求自主组合本地剪辑、二维或三维动画与�
 ## 本地入口
 
 宿主Python：`C:/Users/lenovo/AppData/Local/Programs/VideoTools/.venv/Scripts/python.exe`。共享入口：`C:/Users/lenovo/.codex/runtimes/personal-video/video-toolchain/video-tools.ps1`。
-
-明确切点可写UTF-8 EDL后调用：
-
-```powershell
-& 'C:/Users/lenovo/.codex/runtimes/personal-video/video-toolchain/video-tools.ps1' video-use '<EDL绝对路径>' '<输出绝对路径>'
-```
-
-EDL最小结构为`{"version":1,"sources":{"a":"D:/素材.mp4"},"ranges":[{"source":"a","start":0,"end":2}]}`；明确指定尺寸时添加`"canvas":[宽,高]`。可加`subtitles`的SRT路径、`overlays`及`grade`；默认等比缩放补边，全屏叠加按目标画布准备，需特定位置或缩放的局部叠加可用FFmpeg。`--draft`按比例缩至短边最多720像素；仅截取且其他规格须保持不变时可直接用FFmpeg。
 
 `video-tools.ps1`还提供`compositions`、`remotion-render`、`production`和`blender start/status/render/verify`；共享Remotion渲染入口仅针对共享注册组件，作品自有动画放作品工程，用共享依赖或作品隔离依赖渲染。共享Remotion模块位于`C:/Users/lenovo/.codex/runtimes/personal-video/video-toolchain/remotion/node_modules/`；外部作品配置webpack模块解析以保留原路径并指向该目录。ThreeCanvas使用帧驱动动画、明确width/height和`--gl=angle`，勿依赖实时累计帧。
 

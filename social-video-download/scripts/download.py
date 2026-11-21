@@ -98,11 +98,17 @@ def extract_links(text):
     for raw in URL_RE.findall(text):
         url = raw.rstrip(TRAILING)
         # Common copied Douyin modal links are normalized to the actual video.
-        p = urllib.parse.urlsplit(url)
-        q = urllib.parse.parse_qs(p.query)
-        host = (p.hostname or '').lower()
-        if (host == 'douyin.com' or host.endswith('.douyin.com')) and q.get('modal_id', [''])[0].isdigit():
-            url = 'https://www.douyin.com/video/' + q['modal_id'][0]
+        try:
+            p = urllib.parse.urlsplit(url)
+            host = (p.hostname or '').lower()
+            modal_id = urllib.parse.parse_qs(p.query).get('modal_id', [''])[0]
+            if ((host == 'douyin.com' or host.endswith('.douyin.com'))
+                    and not p.username and not p.password and p.port in (None, 80, 443)
+                    and re.fullmatch(r'[0-9]+', modal_id)):
+                url = 'https://www.douyin.com/video/' + modal_id
+        except ValueError:
+            # Keep the original candidate so platform() reports this item's error.
+            pass
         if url not in links:
             links.append(url)
     return links
@@ -279,9 +285,14 @@ def save_one(url, output, args, source_index=None):
             check_temporary_path(auxiliary)
     expected_duration = getattr(args, 'expected_duration', None)
     require_audio = bool(manifest) or getattr(args, 'require_audio', False)
-    if manifest and (not known_id or not re.fullmatch(r'[0-9]+', known_id) or not expected_duration):
-        raise DownloadError('browser_identity_required', '分轨清单须绑定明确的视频ID及当前播放器完整时长。')
-    existing = source_index.find(args.ffprobe, request_id, known_id or request_id, expected_duration, require_audio)
+    browser_fallback = bool(manifest or getattr(args, 'local_media', None) or args.media_url)
+    if browser_fallback:
+        if not re.fullmatch(r'[0-9]+', known_id or '') or expected_duration is None:
+            raise DownloadError('browser_identity_required', '网页备用下载须绑定明确的视频ID及当前播放器完整时长。')
+        if not math.isfinite(expected_duration) or expected_duration <= 0:
+            raise DownloadError('invalid_expected_duration', '预期时长必须为有限正数。')
+    existing = source_index.find(args.ffprobe, None if browser_fallback else request_id,
+                                 known_id or request_id, expected_duration, require_audio)
     if existing:
         return existing
     with tempfile.TemporaryDirectory(prefix='social-video-download-', dir=temporary_parent(args)) as temporary:
@@ -294,11 +305,11 @@ def save_one(url, output, args, source_index=None):
             if not args.local_media.is_file():
                 raise DownloadError('local_media_missing', '浏览器下载的本地媒体文件不存在。')
             shutil.copyfile(args.local_media, path)
-            profile = {'id': known_id or request_id, 'title': args.title or '视频', 'author': ''}
+            profile = {'id': known_id, 'title': args.title or '视频', 'author': ''}
         elif args.media_url:
             path = stage / 'video.mp4'
             media_download(args.media_url, path, referer='https://www.douyin.com/')
-            profile = {'id': known_id or request_id, 'title': args.title or '抖音视频', 'author': ''}
+            profile = {'id': known_id, 'title': args.title or '抖音视频', 'author': ''}
         else:
             downloaded = douyin_download(url, stage, args.cookies_file, args.ffprobe.with_name('ffmpeg.exe'),
                                          lambda identity: source_index.find(args.ffprobe, video_id=identity,

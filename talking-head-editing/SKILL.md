@@ -22,7 +22,7 @@ talking_head.py render <剪辑目录> <输出.mp4>
 - prepare仅本地准备，默认`video_analysis/standard`、120秒分段、1fps、第一音视频流；人声在其他轨先提取。仅转写用`--mode audio_transcription`，明确切点无需语义判断用`--mode cuts_only`。
 - 豆包ASR给原话与词时间，Seed2.1 Lite理解真实音轨和画面；新standard任务须有`visual_transport=ark_file_av`，deep/fast仅纯画面。ASR默认turbo，按识别效果、功能、输入限制和时延选`doubao_turbo/doubao2`，仅标准版按需用`--asr-feature`取情绪、语速、音量，不默认重复识别。
 - 需要云端处理时带`--allow-paid-calls`逐阶段推进，保留显式收费开关，waiting至少10秒。优先复用有效结果；needs_review或提交未知只恢复原任务，不重提、删锁或另建收费任务；completed自动同步，仅本地结果缺失用`sync <剪辑目录>`。
-- 同原片已完成任务可`import-job <剪辑目录> <job_id>`；补视听理解用prepare的`--reuse-asr-job <job_id>`，匹配原片、分段与音频哈希，沿用真实ASR后端。核对完整转写、全部分段及`audio_understanding`，partial/not_analyzed不称完整理解。
+- 同原片已完成任务可`import-job <剪辑目录> <job_id>`；导入后可用本地证据独立查询、同步和剪辑，`completed_at_import` 表示导入时已完成。补视听理解用prepare的`--reuse-asr-job <job_id>`，匹配原片、分段与音频哈希，沿用真实ASR后端。核对完整转写、全部分段及`audio_understanding`，partial/not_analyzed不称完整理解。
 
 ## 选段与字幕
 
@@ -51,4 +51,4 @@ source取status编号，秒数属各自原片，顺序即成片顺序；半开�
 
 默认短边1080像素，画幅沿首素材显示比例；指定`canvas`可输出其他分辨率与画幅。`render ... --preview`按比例缩至短边最多720像素。只有用户指定才改变画幅；低清素材放大不冒充原生清晰度。FFmpeg/ffprobe：`C:/Users/lenovo/AppData/Local/Programs/FFmpeg/bin/`。
 
-核对实际改动、接缝、字幕与音画同步，交付要求的成片/配套，保护原片、用户改动和已有成果。失败沿原任务恢复；按项目规则确认成果归位且不再需要共享分析证据时，`finish <剪辑目录> --delivered`关闭本次分析任务并更新会话；本地转写、剪辑工程与中间文件按项目规则留存。未使用且收费尝试为0的准备任务可`discard_prepared=true`关闭，未知云任务保留防重状态。
+核对实际改动、接缝、字幕与音画同步，交付要求的成片/配套，保护原片、用户改动和已有成果。失败沿原任务恢复。成果归位后用`finish <剪辑目录> --delivered`收尾：导入方只关闭自己的剪辑会话；自建分析任务在确认共享证据已无后续用途时收尾并清理。本地转写、剪辑工程与中间文件按项目规则留存。未使用且收费尝试为0的准备任务可`discard_prepared=true`关闭，未知云任务保留防重状态。

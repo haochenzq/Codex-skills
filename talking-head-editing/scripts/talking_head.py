@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+from contextlib import contextmanager, nullcontext
 import hashlib
 import importlib
 import importlib.util
@@ -140,8 +141,15 @@ def asset_record(asset):
             'fps': fps, 'audio_streams': audio_count}
 
 
-def new_state(job_id, folder, job):
+def borrowed_job(state):
+    # Before ownership was recorded, only prepare() saved prepare_options.
+    return bool(state['job_id']) and state.get('job_origin',
+        'prepared' if 'prepare_options' in state else 'imported') == 'imported'
+
+
+def new_state(job_id, folder, job, origin):
     return {'schema_version': 1, 'job_id': job_id, 'job_folder': str(folder),
+            'job_origin': origin,
             'mode': job['task'], 'provider': job.get('asr_backend'),
             'assets': [asset_record(a) for a in job['assets']], 'state': job['state'],
             'generated_files_sha256': {}, 'caption_review_required': True}
@@ -224,7 +232,7 @@ def prepare(edit, sources, mode='video_analysis', profile='standard', clip_secon
                                   speaker_info=speaker_info, asr_backend_name=asr_backend_name,
                                   asr_features=asr_features)
         folder, job = workflow.load(result['job_id'])
-        state = new_state(result['job_id'], folder, job)
+        state = new_state(result['job_id'], folder, job, 'prepared')
         state['prepare_options'] = options
         save_session(edit, state)
         if reuse_job:
@@ -307,24 +315,58 @@ def normalize(segments, asset, provider='doubao2'):
             'words': words, 'segments': rows, 'punctuation_alignment_issues': unaligned}
 
 
+@contextmanager
+def import_lock(folder):
+    lock = folder/'.advance.lock'
+    with lock.open('x'):
+        pass
+    try:
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
+
+
 def sync(edit):
     state = load_session(edit)
-    if state.get('workflow_finalized'):
+    if state.get('session_closed') or state.get('workflow_finalized'):
         return status(edit)
     if state['mode'] == 'cuts_only':
         return {'state': 'local_ready', 'job_id': None, 'cloud_calls': 0}
-    workflow = backend()
-    folder, job = workflow.load(state['job_id'])
-    if job['state'] != 'completed' or job.get('asr_backend') not in NATIVE_ASR:
-        raise ValueError('Import requires a completed native Doubao workflow; resume the original job')
-    if [asset_record(a) for a in job['assets']] != state['assets']:
-        raise ValueError('Saved job source selection differs from the edit session')
+    raw_files = [f"transcripts/{a['id']}.raw.json" for a in state['assets']]
+    evidence_file = 'analysis/video_analysis.json'
+    hashes = state.get('generated_files_sha256', {})
+    snapshot_files = raw_files + ([evidence_file] if evidence_file in hashes else [])
+    snapshot = borrowed_job(state) and all(
+        name in hashes and safe(edit/name, edit).is_file() for name in snapshot_files)
+    if snapshot:
+        if any(sha(edit/name) != hashes[name] for name in snapshot_files):
+            raise ValueError('Imported evidence has independent edits; preserve it before syncing')
+    else:
+        try:
+            folder, job = backend().load(state['job_id'])
+        except FileNotFoundError:
+            if borrowed_job(state):
+                raise ValueError('The local import snapshot is incomplete and the original shared job '
+                                 'is unavailable; restore the original evidence before syncing') from None
+            raise
+        if job['state'] != 'completed' or job.get('asr_backend') not in NATIVE_ASR:
+            raise ValueError('Import requires a completed native Doubao workflow; resume the original job')
+        if [asset_record(a) for a in job['assets']] != state['assets']:
+            raise ValueError('Saved job source selection differs from the edit session')
+        with import_lock(folder) if borrowed_job(state) else nullcontext():
+            for asset, local_raw in zip(state['assets'], raw_files):
+                owned(edit, state, local_raw, (folder/asset['id']/'transcript.json').read_bytes())
+            evidence = folder/'video_analysis.json'
+            if evidence.is_file():
+                owned(edit, state, evidence_file, evidence.read_bytes())
+            state['visual_analysis_completed'] = any(c['visual']['state'] == 'done' for c in job['clips'])
+            if borrowed_job(state):
+                state['imported_job_counts'] = {key: job[key] for key in
+                    ('planned_paid_requests', 'paid_requests_attempted') if key in job}
     packed, outputs = [], []
-    for asset in state['assets']:
-        raw = folder/asset['id']/'transcript.json'
-        transcript = normalize(read_json(raw), asset, job['asr_backend'])
-        local_raw = f"transcripts/{asset['id']}.raw.json"
-        owned(edit, state, local_raw, raw.read_bytes())
+    for asset, local_raw in zip(state['assets'], raw_files):
+        raw = edit/local_raw
+        transcript = normalize(read_json(raw), asset, state['provider'])
         transcript['raw_transcript_path'] = str(edit/local_raw)
         transcript['raw_transcript_sha256'] = sha(raw)
         path = f"transcripts/{asset['id']}.json"
@@ -335,15 +377,12 @@ def sync(edit):
             packed.append(f"[{sentence['start']:.3f}–{sentence['end']:.3f}] {sentence['text']} (words {sentence['word_start']}:{sentence['word_end']})")
         packed.append('')
     owned(edit, state, 'takes_packed.md', ('\n'.join(packed)+'\n').encode('utf-8'))
-    evidence = folder/'video_analysis.json'
-    if evidence.is_file():
-        owned(edit, state, 'analysis/video_analysis.json', evidence.read_bytes())
-    videos = read_json(evidence).get('videos', []) if evidence.is_file() else []
+    videos = read_json(edit/evidence_file).get('videos', []) if evidence_file in hashes else []
     state['audio_understanding'] = {a['id']: next((v.get('audio_understanding', 'not_analyzed')
         for v in videos if v['asset_id'] == a['id']), 'no_audio_track' if not a['audio_streams'] else 'not_analyzed') for a in state['assets']}
     state['asr_feature_coverage'] = {v['asset_id']: v.get('asr_feature_coverage', {}) for v in videos}
-    state['state'] = 'analysis_ready'
-    state['visual_analysis_completed'] = any(c['visual']['state'] == 'done' for c in job['clips'])
+    if state['state'] not in ('planned', 'rendered'):
+        state['state'] = 'analysis_ready'
     save_session(edit, state)
     return {'state': state['state'], 'transcripts': outputs,
             'visual_analysis_completed': state['visual_analysis_completed'],
@@ -360,7 +399,7 @@ def import_job(edit, job_id):
         folder, job = workflow.load(job_id)
         if job['state'] != 'completed' or job.get('asr_backend') not in NATIVE_ASR:
             raise ValueError('Only completed native Doubao jobs can be imported')
-        state = new_state(job_id, folder, job)
+        state = new_state(job_id, folder, job, 'imported')
         for asset in state['assets']:
             if sha(asset['source']) != asset['sha256']:
                 raise ValueError('Cached recognition belongs to a changed source')
@@ -373,7 +412,10 @@ def status(edit):
     report = {'state': state['state'], 'mode': state['mode'], 'job_id': state['job_id'],
               'sources': [{'id': a['id'], 'source': a['source'], 'audio_streams': a['audio_streams']} for a in state['assets']],
               'audio_understanding': state.get('audio_understanding', {}), 'asr_feature_coverage': state.get('asr_feature_coverage', {})}
-    if state['job_id'] and not state.get('workflow_finalized'):
+    if borrowed_job(state) and not state.get('workflow_finalized'):
+        report.update(cloud_state='completed_at_import', session_closed=bool(state.get('session_closed')),
+                      **state.get('imported_job_counts', {}))
+    elif state['job_id'] and not state.get('workflow_finalized'):
         folder, job = backend().load(state['job_id'])
         report.update(cloud_state=job['state'], planned_paid_requests=job['planned_paid_requests'],
                       paid_requests_attempted=job.get('paid_requests_attempted', 0), job_folder=str(folder))
@@ -386,14 +428,16 @@ def finish(edit, delivered=False):
     state = load_session(edit)
     if not delivered:
         raise ValueError('Finish only after delivering the reviewed output')
-    if state.get('workflow_finalized'):
+    if state.get('session_closed') or state.get('workflow_finalized'):
         return status(edit)
     output = Path(state.get('last_output', ''))
     if state['state'] != 'rendered' or not output.is_file() or sha(output) != state.get('last_output_sha256'):
         raise ValueError('Keep the workflow until the rendered output is available and unchanged')
-    if state['job_id']:
-        backend().finalize(state['job_id'], delivered=True)
-    state['workflow_finalized'] = True
+    if not borrowed_job(state):
+        if state['job_id']:
+            backend().finalize(state['job_id'], delivered=True)
+        state['workflow_finalized'] = True
+    state['session_closed'] = True
     state['job_folder'] = None
     save_session(edit, state)
     return status(edit)
@@ -401,8 +445,10 @@ def finish(edit, delivered=False):
 
 def advance(edit, allow_paid_calls=False):
     state = load_session(edit)
-    if not state['job_id'] or state.get('reuse_failed') or state.get('workflow_finalized'):
+    if not state['job_id'] or state.get('reuse_failed') or state.get('workflow_finalized') or state.get('session_closed'):
         raise ValueError('No eligible cloud job; review this session instead of submitting another task')
+    if borrowed_job(state):
+        return sync(edit)
     workflow = backend()
     report = asyncio.run(workflow.advance(state['job_id'], allow_paid_calls=allow_paid_calls))
     state['cloud_state'] = report['state']
@@ -438,7 +484,20 @@ def stamp(seconds):
     return f'{h:02}:{m:02}:{s:02},{ms:03}'
 
 
-def ass_captions(captions, width, height):
+def subtitle_defaults(width, height):
+    portrait = height > width
+    scale = min(width, height) / 1080
+    margin = max(1, round(100 * width / 1080)) if portrait else round(width * .05)
+    fields = {
+        'FontName': 'Microsoft YaHei', 'FontSize': max(1, round(66 * scale)),
+        'PrimaryColour': '&H00FFFFFF', 'OutlineColour': '&H00101419',
+        'Bold': -1, 'BorderStyle': 1, 'Outline': round(3 * scale, 3), 'Shadow': 0,
+        'Alignment': 8 if portrait else 2, 'MarginL': margin, 'MarginR': margin,
+        'MarginV': round(height * 1500 / 1920) if portrait else round(height * .06)}
+    return ','.join(f'{field}={value}' for field, value in fields.items())
+
+
+def ass_captions(captions, width, height, style=None):
     def time(seconds):
         ticks = round(seconds*100)
         h, rem = divmod(ticks, 360000)
@@ -446,13 +505,23 @@ def ass_captions(captions, width, height):
         s, cs = divmod(rem, 100)
         return f'{h}:{m:02}:{s:02}.{cs:02}'
 
+    # The exported ASS is also playable on its own. Preserve the historical
+    # base for partial user overrides, exactly as in the render filter.
+    fields = ('FontName FontSize PrimaryColour SecondaryColour OutlineColour BackColour Bold Italic '
+              'Underline StrikeOut ScaleX ScaleY Spacing Angle BorderStyle Outline Shadow Alignment '
+              'MarginL MarginR MarginV Encoding').split()
+    values = ('Microsoft YaHei,48,&H00FFFFFF,&H000000FF,&H00101419,&H80000000,'
+              '0,0,0,0,100,100,0,0,1,2,0,2,40,40,60,1').split(',')
+    if style is None:
+        style = subtitle_defaults(width, height)
+    overrides = {k.strip().casefold(): v for k, v in (part.split('=', 1) for part in style.split(','))}
+    row = ','.join(overrides.get(field.casefold(), value) for field, value in zip(fields, values))
     header = (f'[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n'
               'ScaledBorderAndShadow: yes\n\n[V4+ Styles]\n'
               'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, '
               'Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, '
               'Alignment, MarginL, MarginR, MarginV, Encoding\n'
-              'Style: Default,Microsoft YaHei,48,&H00FFFFFF,&H000000FF,&H00101419,&H80000000,'
-              '0,0,0,0,100,100,0,0,1,2,0,2,40,40,60,1\n\n[Events]\n'
+              f'Style: Default,{row}\n\n[Events]\n'
               'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n')
     lines = []
     for a, b, text in captions:
@@ -562,8 +631,7 @@ def build_plan(edit, plan_path):
         width, height = local.validate_canvas(first['default_canvas'])
     else:
         width, height = local.source_canvas(first['source'])
-    font_size = round(min(height*.045, width/22))
-    style = plan.get('subtitle_style', f'FontName=Microsoft YaHei,FontSize={font_size},PrimaryColour=&H00FFFFFF,OutlineColour=&H00101419,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV={round(height*.06)}')
+    style = plan.get('subtitle_style', subtitle_defaults(width, height))
     if not isinstance(style, str) or not style.strip():
         raise ValueError('Subtitle style must be a nonempty string')
     if not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9]*=[^'\r\n;\\\[\]]+", p) for p in style.split(',')):
@@ -575,13 +643,13 @@ def build_plan(edit, plan_path):
     edl['overlays'] = [dict(o, file=str((edit/o['file']).resolve())) for o in edl['overlays']]
     if captions:
         owned(edit, state, 'master.srt', srt.encode('utf-8'))
-        owned(edit, state, 'master.ass', ass_captions(captions, width, height))
+        owned(edit, state, 'master.ass', ass_captions(captions, width, height, style))
         edl['subtitles'] = str(edit/'master.ass')
     owned(edit, state, 'edl.json', json_bytes(edl))
     owned(edit, state, 'editing-plan.json', json_bytes(plan))
     state.update(state='planned', output_fps=fps, caption_review_required=bool(captions),
                  expected_duration_s=offsets, caption_cues=len(captions),
-                 caption_style=style, output_canvas=[width, height])
+                 caption_style=style, caption_style_embedded=True, output_canvas=[width, height])
     save_session(edit, state)
     return {'state': 'planned', 'edl': str(edit/'edl.json'), 'caption_cues': len(captions),
             'expected_duration_s': offsets, 'caption_review_required': bool(captions), 'cloud_calls': 0}
@@ -607,7 +675,12 @@ def render(edit, output, preview=False):
         # Previously planned projects record their original canvas in state.
         edl['canvas'] = state['output_canvas']
     atomic(work/'edl.json', json_bytes(edl))
-    flags = ['--fps', str(state['output_fps']), '--caption-style', state['caption_style']]
+    style = state['caption_style']
+    if state.get('caption_style_embedded'):
+        # libass interprets force_style Alignment using legacy SSA numbering.
+        # New ASS files already contain the intended native alignment.
+        style = ','.join(part for part in style.split(',') if part.split('=', 1)[0].casefold() != 'alignment')
+    flags = ['--fps', str(state['output_fps']), '--caption-style', style]
     if preview:
         flags.append('--draft')
     result = subprocess.run([sys.executable, '-B', '-X', 'utf8', str(Path(__file__).resolve()),

@@ -42,4 +42,3 @@
 
 此前已从当前分支移除停用的 `libtv-drama-production`、`seedance-video-production`、`toolchain-video-production`、`video-cover`、`workspace-maintenance`，以及旧 `video-use` 内嵌的 `manim-video` 技能和过时配套；旧版本可通过 Git 提交历史恢复。
 
-reusable-lessons 为此前保留的技能资料，不在当前个人技能维护清单中。

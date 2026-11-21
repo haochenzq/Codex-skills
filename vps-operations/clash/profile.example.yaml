@@ -1,0 +1,62 @@
+# 示例配置。替换示例 IP、认证参数和证书指纹后使用。
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  # 不设全局直连 DNS 覆盖；Google 国内缓存需可信解析，国内集合仍使用下方策略。
+  nameserver:
+  - https://1.1.1.1/dns-query#代理选择
+  default-nameserver:
+  - 223.5.5.5
+  - 119.29.29.29
+  nameserver-policy:
+    'cn.alibabacloud.com,account-cn.alibabacloud.com':
+    - https://dns.alidns.com/dns-query#DIRECT
+    '+.services.googleapis.cn,+.capcut.com,+.capcutcdn-us.com,+.alibabacloud.com,+.webnovel.com,+.hailuoai.video':
+    - https://1.1.1.1/dns-query#代理选择
+    geosite:tiktok,bytedance-ai-!cn:
+    - https://1.1.1.1/dns-query#代理选择
+    # 国内 AI 及既有厂商业务使用国内解析；上方海外例外优先。
+    geosite:cn,alibaba,bytedance,tencent:
+    - https://dns.alidns.com/dns-query#DIRECT
+    '+.xhsrcdn.com,+.fengkongcloud.com,+.byteplus.com,+.byteplusapi.com,+.bytepluses.com,+.tencentgames.com,+.siliconflow.com':
+    - https://dns.alidns.com/dns-query#DIRECT
+proxies:
+- {"name": "东京-Hysteria2-Primary", "type": "hysteria2", "server": "192.0.2.10", "port": 443, "password": "REPLACE_WITH_HYSTERIA2_PASSWORD", "sni": "192.0.2.10", "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000", "skip-cert-verify": false, "udp": true}
+- {"name": "东京-Reality-Backup", "type": "vless", "server": "192.0.2.10", "port": 443, "uuid": "00000000-0000-4000-8000-000000000001", "flow": "xtls-rprx-vision", "tls": true, "servername": "www.microsoft.com", "client-fingerprint": "chrome", "reality-opts": {"public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "short-id": "0000000000000000"}, "udp": true}
+proxy-groups:
+- name: 代理选择
+  type: select
+  proxies:
+  - 东京主备自动
+  - 东京-Hysteria2-Primary
+  - 东京-Reality-Backup
+- name: 东京主备自动
+  type: fallback
+  proxies:
+  - 东京-Hysteria2-Primary
+  - 东京-Reality-Backup
+  url: https://www.gstatic.com/generate_204
+  interval: 30
+  timeout: 5000
+  lazy: false
+rules:
+- AND,((DST-PORT,8443),(IP-CIDR,192.0.2.10/32,no-resolve)),东京-Hysteria2-Primary
+- IP-CIDR,192.0.2.10/32,DIRECT,no-resolve
+- GEOSITE,private,DIRECT
+- GEOIP,private,DIRECT,no-resolve
+# 保留阿里云中国入口的直连，国际站和 Webnovel 优先于厂商集合。
+- OR,((DOMAIN,cn.alibabacloud.com),(DOMAIN,account-cn.alibabacloud.com)),DIRECT
+- OR,((GEOSITE,tiktok),(GEOSITE,bytedance-ai-!cn),(DOMAIN-SUFFIX,capcut.com),(DOMAIN-SUFFIX,capcutcdn-us.com),(DOMAIN-SUFFIX,services.googleapis.cn),(DOMAIN-SUFFIX,alibabacloud.com),(DOMAIN-SUFFIX,webnovel.com),(DOMAIN-SUFFIX,hailuoai.video)),代理选择
+- OR,((GEOSITE,cn),(GEOSITE,alibaba),(GEOSITE,bytedance),(GEOSITE,tencent),(DOMAIN-SUFFIX,xhsrcdn.com),(DOMAIN-SUFFIX,fengkongcloud.com),(DOMAIN-SUFFIX,byteplus.com),(DOMAIN-SUFFIX,byteplusapi.com),(DOMAIN-SUFFIX,bytepluses.com),(DOMAIN-SUFFIX,tencentgames.com),(DOMAIN-SUFFIX,siliconflow.com)),DIRECT
+# 仅确认的 Google 国内下载缓存直连；不直连整个 Googlevideo 或 Google API。
+- OR,((DOMAIN,redirector.c.play.google.com),(DOMAIN-SUFFIX,gvt1-cn.com),(DOMAIN-REGEX,^r+[0-9]+(---|\.)sn-(2x3|ni5|j5o)\w{5}\.(googlevideo\.com|xn--ngstr-lra8j\.com)$)),DIRECT
+- GEOSITE,geolocation-!cn,代理选择
+- GEOIP,CN,DIRECT
+- MATCH,代理选择

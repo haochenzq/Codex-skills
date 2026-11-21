@@ -1,0 +1,9 @@
+{
+  "quota_bytes": 1000000000000,
+  "used_bytes": 0,
+  "expire": 1893456000,
+  "cycle_start": "2029-12-01",
+  "cycle_end": "2030-01-01",
+  "calibration_id": "example",
+  "calibrated_at": "2029-12-01T00:00:00Z"
+}

@@ -1,0 +1,19 @@
+[Unit]
+Description=Sync V.PS traffic usage
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=personal-vps-api
+Group=personal-vps-api
+ExecStart=/usr/bin/python3 /opt/personal-vps-subscription/vps_usage_sync.py
+TimeoutStartSec=45
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/personal-vps-api /var/lib/personal-vps-api-usage
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

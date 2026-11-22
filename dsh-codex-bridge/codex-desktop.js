@@ -4,6 +4,19 @@ import { bridgeError } from './protocol.js'
 
 const pipe = '\\\\.\\pipe\\codex-ipc'
 const maxFrameBytes = 32 * 1024 * 1024
+const subagentInputError = 'direct app-server input is not allowed for multi-agent v2 sub-agents'
+
+export function subagentTargetError() {
+  return bridgeError('codex-subagent-target',
+    'Codex cannot receive direct messages in a sub-agent. Select its main conversation.')
+}
+
+function checkSubagentRejection(response) {
+  if (response.resultType === 'error' && typeof response.error === 'string' &&
+    response.error.endsWith(subagentInputError)) {
+    throw subagentTargetError()
+  }
+}
 
 export async function deliverToDesktopOwner(request, ownerId, call, failure) {
   const { threadId: conversationId, clientUserMessageId, input } = request
@@ -15,6 +28,7 @@ export async function deliverToDesktopOwner(request, ownerId, call, failure) {
       prompt: text, addedFiles: [], fileAttachments: [], ideContext: null, imageAttachments: [], workspaceRoots: [],
     } },
   }, ownerId, 35_000)
+  checkSubagentRejection(steer)
   if (steer.resultType === 'success' && steer.handledByClientId === ownerId && steer.result?.result?.turnId) {
     return { turn: { id: steer.result.result.turnId } }
   }
@@ -26,6 +40,7 @@ export async function deliverToDesktopOwner(request, ownerId, call, failure) {
     conversationId,
     turnStart: { request, context: { inheritThreadSettings: true } },
   }, ownerId)
+  checkSubagentRejection(start)
   if (start.resultType !== 'success' || start.handledByClientId !== ownerId) throw failure()
   return start.result?.result ?? {}
 }

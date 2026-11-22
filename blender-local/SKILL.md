@@ -9,7 +9,7 @@ description: 通过现有本地 Blender MCP 检查和编辑场景，进行建模
 
 ## 连接与场景
 
-- 用`get_addon_status`、`get_scene_info`核对版本、连接和场景，读取返回文本中的错误。本机Blender 4.5.9 LTS：`D:/Program Files/Blender/blender-4.5.9-windows-x64/blender.exe`；启动：`D:/BlenderMCP/启动Blender.cmd`；插件端口：`127.0.0.1:9876`。
+- 用`get_addon_status`、`get_scene_info`核对版本、连接和场景，读取返回文本中的错误。本机正式安装版 Blender 4.5.16 LTS：`C:/Program Files/Blender Foundation/Blender 4.5/blender.exe`；启动：`D:/BlenderMCP/启动Blender.cmd`；插件端口：`127.0.0.1:9876`。
 - 离线先区分程序未运行、插件未监听或MCP故障；按需启动既有程序，不例行重装、升级、改配置，不多开实例抢端口或强杀未知进程。
 - 用`execute_blender_code`读取`bpy.data.filepath`、`bpy.data.is_dirty`、场景、模式与选择。局部修改既有作品，演示用独立场景或集合；不清空启动场景或覆盖未保存工作。新文件可用`save_as_mainfile(copy=True)`保留当前文件身份；导出前保护选择、模式、帧和场景，之后按需恢复。
 - 路径或端口变化时，核对当前MCP配置的command、args及插件监听设置，复用实际入口；无需读取构建项目资料。

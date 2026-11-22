@@ -1,6 +1,6 @@
 # 视频制作共享运行代码
 
-本目录保存制作技能依赖的局部运行代码，配合已部署的个人视频共享环境使用。入口与依赖见[工具链运行说明](../toolchain-video-production/references/runtime.md)。
+本目录保留早期视频制作工具链的部分源码。当前制作使用的宿主工具及调用方式见[本地视频制作技能](../local-video-production/SKILL.md#本地入口)。
 
 - `local_tools.py`：本地 Remotion、video-use 与 FFmpeg 入口；同一次剪接处理对同一源文件复用内容哈希，新的处理重新核对。统一 `production` 入口的参数保持原样，现有 `video-use --draft` 可按需预览。
 - `test_local_hash_cache.py`：3项离线针对性检查，覆盖同源/别名复用、不同源区分、跨次内容变化和未启用缓存的路径。

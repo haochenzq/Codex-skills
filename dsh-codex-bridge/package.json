@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-codex-bridge",
-  "version": "0.6.6",
+  "version": "0.6.8",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,7 +8,7 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["index.js", "tasks.js", "protocol.js", "client.js", "direct-chat.js", "codex-service.js", "codex-desktop.js", "attachments.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "files": ["index.js", "tasks.js", "protocol.js", "client.js", "direct-chat.js", "turn-channel.js", "configure-hooks.js", "codex-service.js", "codex-desktop.js", "attachments.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" }
   }

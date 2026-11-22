@@ -3,7 +3,8 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { createServer } from 'node:net'
 import { bridgeDirectory, bridgeError, dshSessionId, endpointFile, maxRequestBytes, readLine, requestPrefix, requestUuid, sameToken, socketTimeoutMs } from './protocol.js'
 import { createTasks } from './tasks.js'
-import { createDirectChat } from './direct-chat.js'
+import { createDirectChat, sendCodexMessage } from './direct-chat.js'
+import { createTurnChannel } from './turn-channel.js'
 import { attachmentSources, codexAttachment, importAttachment, readAttachments } from './attachments.js'
 
 export const inject = ['connection', 'typertGateway', 'tools']
@@ -24,7 +25,14 @@ export async function apply(ctx) {
 
   const invoke = (method, args, signal) =>
     gateway.invoke({ namespace: 'session', method, args, peer, signal })
-  const directChat = createDirectChat(ctx, undefined, (session, id, seq, signal) =>
+  const channel = createTurnChannel()
+  const send = (target, body, attachment, activeOnly) => {
+    const turnId = channel.activeTurn(target)
+    if (turnId && !attachment) return channel.sendActiveTurn(target, turnId, body)
+    if (activeOnly) throw bridgeError('codex-turn-unavailable', 'No registered active turn for this text delivery.')
+    return sendCodexMessage(target, body, attachment)
+  }
+  const directChat = createDirectChat(ctx, directory, send, (session, id, seq, signal) =>
     codexAttachment(ctx, session, id, seq, (method, args) => invoke(method, args, signal)))
 
   const server = createServer(socket => {
@@ -51,6 +59,7 @@ export async function apply(ctx) {
         if (!sameToken(request?.token, token)) throw bridgeError('unauthorized', 'Invalid local bridge token.')
         const call = (method, args) => invoke(method, args, signal)
         const handle = () => {
+          if (request.op === 'turn-hook') return channel.hook(request)
           if (request.op === 'send') return directChat.submit(request,
             payload => dispatch(payload, call, path => importAttachment(ctx, path, request.sessionId, signal)))
           if (['attachments', 'attachment-bytes', 'attachment-data'].includes(request.op)) {
@@ -75,6 +84,7 @@ export async function apply(ctx) {
   })
 
   ctx.effect(() => () => {
+    channel.close()
     for (const socket of sockets) socket.destroy()
     server.close()
     rmSync(temporary, { force: true })

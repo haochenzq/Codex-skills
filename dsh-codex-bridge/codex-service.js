@@ -29,7 +29,7 @@ function startCodexDaemon(cli) {
 
 // The Windows CLI proxies its private control socket as a raw WebSocket stream.
 // Keep the TCP adapter one-shot, loopback-only and protected by a random URL.
-export async function connectCodexService(cli, run) {
+export async function connectCodexService(cli, run, timeoutMs = 20_000) {
   const path = '/' + randomUUID()
   const clients = new Set()
   let proxy
@@ -96,11 +96,11 @@ export async function connectCodexService(cli, run) {
         return new Promise((resolve, reject) => {
           pending.set(key, { resolve, reject })
           const payload = JSON.stringify({ id: key, method, params })
-          if (method === 'turn/start') sendStarted = true
+          if (method === 'turn/start' || method === 'thread/queue/add') sendStarted = true
           ws.send(payload)
         })
       }
-      await rpc('initialize', { clientInfo: { name: 'dsh-codex-bridge', version: '0.6.6' },
+      await rpc('initialize', { clientInfo: { name: 'dsh-codex-bridge', version: '0.6.8' },
         capabilities: { experimentalApi: true } })
       ws.send(JSON.stringify({ method: 'initialized', params: {} }))
       return run(rpc)
@@ -108,7 +108,7 @@ export async function connectCodexService(cli, run) {
     return await Promise.race([operation(), new Promise((_, reject) => {
       timer = setTimeout(() => reject(sendStarted
         ? bridgeError('codex-delivery-unknown', 'Codex timed out. Check the target before retrying.')
-        : bridgeError('codex-control-timeout', 'Codex timed out before sending the message.')), 20_000)
+        : bridgeError('codex-control-timeout', 'Codex timed out before sending the message.')), timeoutMs)
     })])
   } finally {
     clearTimeout(timer)

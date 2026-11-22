@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createConnection } from 'node:net'
-import { bridgeDirectory, bridgeError, endpointFile, maxResponseBytes, readLine, socketTimeoutMs } from './protocol.js'
+import { bridgeDirectory, bridgeError, endpointFile, maxResponseBytes, requestUuid, readLine, socketTimeoutMs } from './protocol.js'
 
 async function call(request) {
   const endpoint = await readFile(endpointFile(bridgeDirectory()), 'utf8').then(JSON.parse).catch(error => {
@@ -59,6 +59,8 @@ const usage = [
   'node client.js history <sessionId> [limit] [beforeSeq]',
   'node client.js message <sessionId> <seq> [offset]',
   'node client.js tool-result <sessionId> <seq> [offset]',
+  'node client.js send-addressed <sessionId> <requestUuid> [--reply-to <codexId>] <text>',
+  'node client.js read-reply <sessionId> <codexId> <requestUuid>',
   'node client.js state <sessionId>',
   'node client.js attachments <sessionId> [beforeSeq]',
   'node client.js attachment-export <sessionId> <seq> <sha256:...> <destination>',
@@ -71,10 +73,37 @@ const usage = [
   'node client.js task-current <sessionId>',
 ].join('\n')
 
+// The recipient and request ID come from the caller; DSH supplies only the reply body.
+async function addressedReply(sessionId, target, requestId) {
+  if (!requestUuid.test(target) || !requestUuid.test(requestId)) {
+    throw bridgeError('invalid-address', 'Provide the authorized destination and original request UUID.')
+  }
+  const prefix = '[DSH ' + target + ' ' + requestId + '] '
+  let beforeSeq
+  for (;;) {
+    const page = await call({ op: 'history', sessionId, limit: 50, beforeSeq })
+    for (const item of page.messages.slice().reverse()) {
+      if (item.role !== 'deepseek' || !item.text.startsWith(prefix)) continue
+      let text = item.text
+      let offset = item.nextOffset
+      while (offset !== undefined) {
+        const chunk = await call({ op: 'message', sessionId, seq: item.seq, offset })
+        text += chunk.text
+        offset = chunk.nextOffset
+      }
+      return { status: 'available', target, requestId, seq: item.seq, text: text.slice(prefix.length) }
+    }
+    if (!page.hasMore || page.beforeSeq === beforeSeq) return { status: 'pending', target, requestId }
+    beforeSeq = page.beforeSeq
+  }
+}
+
 const [op, sessionId, first, second, ...rest] = process.argv.slice(2)
 try {
   if (!op || op === '--help') {
     console.log(usage)
+  } else if (op === 'read-reply') {
+    console.log(JSON.stringify(await addressedReply(sessionId, first, second), null, 2))
   } else if (op === 'attachment-export') {
     console.log(JSON.stringify(await exportAttachment(sessionId, Number(first), second, rest[0]), null, 2))
   } else {
@@ -90,7 +119,7 @@ try {
       request.seq = Number(first)
       if (second !== undefined) request.offset = Number(second)
     }
-    if (op === 'send' || op === 'send-file') {
+    if (op === 'send' || op === 'send-file' || op === 'send-addressed') {
       request.op = 'send'
       request.requestId = first
       const parts = op === 'send-file' ? [...rest] : [second, ...rest]
@@ -100,6 +129,13 @@ try {
         if (!request.replyTo) throw bridgeError('invalid-reply-target', 'Choose an existing Codex chat link or ID.')
       }
       request.text = parts.join(' ')
+      if (op === 'send-addressed') {
+        const target = request.replyTo || process.env.CODEX_THREAD_ID
+        if (!requestUuid.test(target) || !requestUuid.test(first) || !request.text.trim()) {
+          throw bridgeError('invalid-address', 'Provide a destination, request UUID and nonempty message.')
+        }
+        request.text += '\n定向文字回执：请在本会话单独回复，以以下前缀起行，空格后紧接本次回复正文。由请求方取回。\n[DSH ' + target + ' ' + first + '] '
+      }
       if (op === 'send-file') {
         if (!second) throw bridgeError('invalid-attachment', 'Choose an attachment path.')
         request.filePath = resolve(second)

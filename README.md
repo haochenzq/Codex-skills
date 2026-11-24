@@ -1,6 +1,6 @@
 # Codex skills
 
-个人 Codex 技能集合，收录 10 个自维护技能。同步日期为 2026-11-23。
+个人 Codex 技能集合，收录 8 个自维护技能。同步日期为 2026-11-24。
 
 ## 技能导航
 
@@ -12,9 +12,7 @@
 | [talking-head-editing](talking-head-editing/SKILL.md) | 口播语义选段、字幕、剪辑与交付 |
 | [video-use](video-use/SKILL.md) | 明确操作的剪切、字幕、调色、混音和叠加 |
 | [volc-video-analysis](volc-video-analysis/SKILL.md) | 视频分析、音频转写、比较及任务恢复 |
-| [volc-video-generation](volc-video-generation/SKILL.md) | 火山 Seedance 视频生成、原任务查询和下载 |
 | [local-video-production](local-video-production/SKILL.md) | 本地视频制作及工具选择 |
-| [video-directing-production](video-directing-production/SKILL.md) | 分集短剧的镜头表演、参考素材准备和 LibTV 草卡制作 |
 | [codex-to-dsh](codex-to-dsh/SKILL.md) | 配对 DSH 会话，在 Codex 主聊天的当前轮次双向收发文字 |
 
 ## DSH 会话协作桥
@@ -29,7 +27,7 @@
 
 ## 源码与使用
 
-维护源码位于本机构建项目的各模块 `skill-package/<技能名>/`，全局安装在 `%USERPROFILE%/.codex/skills/`。9 项技能已核对本机安装副本。video-directing-production 从维护源码整理为可独立使用的公开版，本机尚未全局安装。
+维护源码位于本机构建项目的各模块 `skill-package/<技能名>/`，全局安装在 `%USERPROFILE%/.codex/skills/`。
 
 仓库保留本机运行路径；克隆或复制技能不等于完成部署。在其他电脑使用前，需要按技能说明配置解释器、FFmpeg、Blender、Node、MCP 连接及相应共享运行环境。Three.js 模板自带依赖清单和锁文件；视频技能使用说明中指定的宿主运行入口。
 

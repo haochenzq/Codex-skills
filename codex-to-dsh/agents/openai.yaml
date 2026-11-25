@@ -1,4 +1,0 @@
-interface:
-  display_name: "Codex 与 DSH 通话"
-  short_description: "与指定的 DSH 会话配对，实时收发文字和本机文件的绝对路径"
-  default_prompt: "使用 $codex-to-dsh 联系我指定的 DSH 会话，并在该会话对齐分工。"

@@ -1,6 +1,6 @@
 # Codex skills
 
-个人 Codex 技能集合，收录 8 个自维护技能。同步日期为 2026-11-24。
+个人 Codex 技能集合，收录 7 个自维护技能。
 
 ## 技能导航
 
@@ -13,11 +13,7 @@
 | [video-use](video-use/SKILL.md) | 明确操作的剪切、字幕、调色、混音和叠加 |
 | [volc-video-analysis](volc-video-analysis/SKILL.md) | 视频分析、音频转写、比较及任务恢复 |
 | [local-video-production](local-video-production/SKILL.md) | 本地视频制作及工具选择 |
-| [codex-to-dsh](codex-to-dsh/SKILL.md) | 配对 DSH 会话，在 Codex 主聊天的当前轮次双向收发文字 |
 
-## DSH 会话协作桥
-
-配套 DSH 插件、钩子安装器与插件测试在 DSH-Plugins 仓库维护。安装插件后，在普通 Codex 主聊天粘贴 DSH 会话 ID 即可配对。[DSH Codex Bridge 0.7.0 安装说明](https://github.com/haochenzq/DSH-Plugins/blob/main/plugins/dsh-codex-bridge/README.md)
 
 适用范围、依赖、执行流程及授权要求以各技能的 `SKILL.md` 为准。系统技能和第三方插件技能由各自发布方维护，不收录在本仓库。
 
